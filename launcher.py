@@ -96,6 +96,7 @@ def print_qr(url):
 def main():
     parser = argparse.ArgumentParser(description="Antigravity Phone Connect Launcher")
     parser.add_argument('--mode', choices=['local', 'web'], default='web', help="Mode to run in: 'local' (WiFi) or 'web' (Internet)")
+    parser.add_argument('--provider', choices=['ngrok', 'cloudflare'], help="Tunnel provider (defaults to .env TUNNEL_PROVIDER or 'ngrok')")
     args = parser.parse_args()
 
     # 1. Setup Environment
@@ -111,6 +112,9 @@ def main():
     
     # Load .env if it exists
     load_dotenv()
+
+    # Determine Provider
+    provider = args.provider or os.environ.get('TUNNEL_PROVIDER', 'ngrok').lower()
     
     # Setup App Password
     passcode = os.environ.get('APP_PASSWORD')
@@ -180,13 +184,6 @@ def main():
             print("4. You should be connected automatically!")
             
         elif args.mode == 'web':
-            # Check Ngrok Token
-            token = os.environ.get('NGROK_AUTHTOKEN')
-            if token:
-                ngrok.set_auth_token(token)
-            else:
-                print("⚠️  Warning: NGROK_AUTHTOKEN not found in .env. Tunnel might expire.")
-
             port = os.environ.get('PORT', '3000')
             
             # Detect HTTPS
@@ -195,16 +192,97 @@ def main():
                 protocol = "https"
                 
             addr = f"{protocol}://localhost:{port}"
-            
-            print("PLEASE WAIT... Establishing Tunnel...")
-            tunnel = ngrok.connect(addr, host_header="rewrite")
-            public_url = tunnel.public_url
+            public_url = ""
+
+            if provider == 'cloudflare':
+                cf_name = os.environ.get('CLOUDFLARE_TUNNEL_NAME') or os.environ.get('CLOUDFLARE_TUNNEL_ID')
+                cf_custom_url = os.environ.get('CLOUDFLARE_TUNNEL_URL')
+
+                if cf_name:
+                    print(f"PLEASE WAIT... Starting Persistent Cloudflare Tunnel: {cf_name}...")
+                    # For a named tunnel, the user usually has it configured to point to localhost:PORT
+                    # We run it using the name/ID.
+                    cf_cmd = ["cloudflared", "tunnel", "run", cf_name]
+                    public_url = cf_custom_url
+                    
+                    if not public_url:
+                        print("⚠️  Warning: CLOUDFLARE_TUNNEL_URL not set. QR Code might be incorrect.")
+                        public_url = "https://your-cloudflare-hostname.com"
+                    
+                    try:
+                        cf_process = subprocess.Popen(cf_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        # Give it a moment to stabilize
+                        time.sleep(2)
+                    except FileNotFoundError:
+                        print("❌ Error: 'cloudflared' binary not found.")
+                        sys.exit(1)
+                else:
+                    print("PLEASE WAIT... Establishing Ephemeral Cloudflare Tunnel...")
+                    # Start cloudflared in a separate process
+                    # We use --url to create an ephemeral TryCloudflare tunnel
+                    cf_cmd = ["cloudflared", "tunnel", "--url", addr]
+                    
+                    if protocol == "https":
+                        cf_cmd.append("--no-tls-verify")
+                    
+                    # We need to capture stderr because cloudflared prints the URL there
+                    try:
+                        cf_process = subprocess.Popen(
+                            cf_cmd, 
+                            stdout=subprocess.PIPE, 
+                            stderr=subprocess.STDOUT, 
+                            text=True, 
+                            bufsize=1, 
+                            universal_newlines=True
+                        )
+                        
+                        # Watch for the URL in the output
+                        start_time = time.time()
+                        timeout = 30 # seconds
+                        
+                        while time.time() - start_time < timeout:
+                            line = cf_process.stdout.readline()
+                            if not line:
+                                break
+                            
+                            # Cloudflare outputs things like: 
+                            # |  https://some-subdomain.trycloudflare.com                           |
+                            if ".trycloudflare.com" in line:
+                                import re
+                                match = re.search(r'https://[a-zA-Z0-9-]+\.trycloudflare\.com', line)
+                                if match:
+                                    public_url = match.group(0)
+                                    break
+                        
+                        if not public_url:
+                            print("❌ Failed to find Cloudflare Tunnel URL. Is 'cloudflared' installed?")
+                            cf_process.terminate()
+                            sys.exit(1)
+                            
+                    except FileNotFoundError:
+                        print("❌ Error: 'cloudflared' binary not found. Please install it from: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/install-run/")
+                        sys.exit(1)
+                    except Exception as e:
+                        print(f"❌ Failed to start Cloudflare Tunnel: {e}")
+                        sys.exit(1)
+            else:
+                # Default to Ngrok
+                # Check Ngrok Token
+                token = os.environ.get('NGROK_AUTHTOKEN')
+                if token:
+                    ngrok.set_auth_token(token)
+                else:
+                    print("⚠️  Warning: NGROK_AUTHTOKEN not found in .env. Tunnel might expire.")
+
+                print("PLEASE WAIT... Establishing Ngrok Tunnel...")
+                tunnel = ngrok.connect(addr, host_header="rewrite")
+                public_url = tunnel.public_url
             
             # Magic URL with password
             final_url = f"{public_url}?key={passcode}"
             
             print("\n" + "="*50)
-            print(f"   🌍 GLOBAL WEB ACCESS")
+            print(f"   🌍 GLOBAL WEB ACCESS ({provider.upper()})")
             print("="*50)
             print(f"🔗 Base URL: {public_url}")
             print(f"🔑 Passcode: {passcode}")
@@ -264,10 +342,11 @@ def main():
         print("\n\n👋 Shutting down...")
     except Exception as e:
         print(f"\n❌ Error: {e}")
+        sys.exit(1)
     finally:
         # Cleanup
         try:
-            if node_process:
+            if 'node_process' in locals() and node_process:
                 node_process.terminate()
                 try:
                     node_process.wait(timeout=2)
@@ -275,14 +354,15 @@ def main():
                     node_process.kill()
             
             if args.mode == 'web':
-                ngrok.kill()
-        except:
+                if provider == 'cloudflare' and 'cf_process' in locals():
+                    cf_process.terminate()
+                elif 'ngrok' in locals():
+                    ngrok.kill()
+        except Exception:
             pass
         
         if 'log_file' in locals() and log_file:
             log_file.close()
-        
-        sys.exit(0)
 
 if __name__ == "__main__":
     main()

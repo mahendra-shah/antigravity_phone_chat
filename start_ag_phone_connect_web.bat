@@ -14,6 +14,7 @@ echo.
 echo [0/2] Cleaning up orphans...
 taskkill /f /im node.exe /fi "WINDOWTITLE eq AG_SERVER_PROC*" >nul 2>&1
 taskkill /f /im ngrok.exe >nul 2>&1
+taskkill /f /im cloudflared.exe >nul 2>&1
 for /f "tokens=5" %%a in ('netstat -aon ^| findstr :3000 ^| findstr LISTENING') do taskkill /f /pid %%a >nul 2>&1
 
 :: 1. Ensure dependencies are installed
@@ -65,6 +66,13 @@ echo [INFO] .env configuration found.
 echo [1/1] Launching Antigravity Phone Connect...
 echo (This will start both the server and the web tunnel)
 python launcher.py --mode web
+if %errorlevel% neq 0 (
+    echo.
+    echo [ERROR] Launcher failed with exit code %errorlevel%.
+    echo Check for any error messages above.
+    pause
+    exit /b %errorlevel%
+)
 
-:: 6. Auto-close when done
-exit
+:: 6. Successful exit
+exit /b 0

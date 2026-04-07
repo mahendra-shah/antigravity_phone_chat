@@ -69,20 +69,35 @@ The script will:
 
 Access your Antigravity session from **anywhere in the world** (Mobile Data, outside Wi-Fi) with secure passcode protection.
 
-### Setup (First Time)
+### Step 1: Choose a Tunnel Provider
+
+You can use either **ngrok** (easiest, requires account) or **Cloudflare Tunnel** (requires `cloudflared` installed).
+
+#### Option A: ngrok (Default)
 1. **Get an ngrok Token**: Sign up for free at [ngrok.com](https://ngrok.com) and get your "Authtoken".
-2. **Automatic Configuration (Recommended)**: Simply run any launcher script. They will detect if `.env` is missing and automatically create it using `.env.example` as a template.
-3. **Manual Setup**: Alternatively, copy `.env.example` to `.env` manually and update the values:
+2. **Setup**: Update your `.env` file:
+   ```env
+   TUNNEL_PROVIDER=ngrok
+   NGROK_AUTHTOKEN=your_token_here
+   ```
+
+#### Option B: Cloudflare Tunnel
+1. **Install cloudflared**: Follow the [official guide](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/get-started-guide/local/instance/install-run/) to install `cloudflared` on your system.
+2. **Setup**: Update your `.env` file:
+   ```env
+   TUNNEL_PROVIDER=cloudflare
+   ```
+
+### Step 2: Configuration
+1. **Automatic Configuration**: Simply run any launcher script. They will detect if `.env` is missing and automatically create it using `.env.example` as a template.
+2. **Manual Setup**: Alternatively, copy `.env.example` to `.env` manually and update the values:
    ```bash
    copy .env.example .env   # Windows
    cp .env.example .env     # Mac/Linux
    ```
-   Update the `.env` file with your details:
+   Ensure you set a secure password:
    ```env
-   NGROK_AUTHTOKEN=your_token_here
    APP_PASSWORD=your_secure_passcode
-   XXX_API_KEY=your-ai-provider-key
-   PORT=3000
    ```
 
 ### Usage
