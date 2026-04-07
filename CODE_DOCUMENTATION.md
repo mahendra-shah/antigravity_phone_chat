@@ -181,7 +181,8 @@ The server automatically detects SSL certificates and enables HTTPS:
 
 - **Self-Signed Certificates**: The generated certificates are self-signed; browsers will show a warning on the first visit.
 - **Selective Access**: LAN devices have automatic access. External tunnel connections (Web Mode) require a passcode or Magic Link.
-- **Session Security**: Uses signed, `httpOnly` cookies for authentication.
+- **Zero-Inline Hardening (NEW)**: We have refactored 100% of the mobile frontend to remove `'unsafe-inline'` script dependencies. A strict **Content Security Policy (CSP)** is now enforced, providing a major defense-in-depth layer.
+- **Automated Startup Audit (NEW)**: `server.js` now prints high-visibility warnings if you are using default or insecure session secrets.
 - **Input Sanitization**: User input is escaped using `JSON.stringify` before CDP injection.
 - **Output Encoding**: Data scraped from the IDE (like chat history titles) is strictly escaped via an `escapeHtml` utility before being inserted into the mobile DOM to prevent cross-site scripting (XSS).
 

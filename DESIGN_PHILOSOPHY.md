@@ -19,10 +19,11 @@ The snapshot system clones the DOM before capturing. This ensures that the mirro
 ### 3. Visual Parity (The Dark Mode Bridge)
 Antigravity themes have thousands of CSS variables. Instead of trying to mirror every variable perfectly, we use **Aggressive CSS Inheritance**. The frontend captures the raw HTML and wraps it in a modern, slate-dark UI that feels premium and natively mobile, regardless of the Desktop's theme. Recent updates layer this with **Glassmorphism UI components** and fine-tuned dark mode styling, ensuring that settings bars, model states, and quick actions remain frictionlessly readable and highly aesthetically pleasing against dynamic coding backgrounds.
 
-### 4. Security-First Local Access
+### 4. Security-First Local Access & "Zero-Inline" Hardening
 - **HTTPS by Default**: When SSL certificates are generated, the server automatically uses HTTPS.
 - **Hybrid SSL Generation**: Tries OpenSSL first (better IP SAN support), falls back to Node.js crypto (zero dependencies).
 - **Auto IP Detection**: Certificates include your local network IP addresses for better browser compatibility.
+- **Strict Separation of Concerns**: We strictly enforce a **Zero-Inline-JS** policy. By refactoring 100% of event logic into `app.js` and removing `onclick` handlers from the DOM, we enable a robust Content Security Policy (CSP) that blocks `'unsafe-inline'` script execution.
 - **LAN Constraint & Global Freedom**: By default, it stays on LAN for privacy. However, the `_web` mode introduces secure tunneling for global access, prioritizing **Freedom of Movement** without sacrificing security.
 
 ### 5. Mobile-First Navigation (History Management)

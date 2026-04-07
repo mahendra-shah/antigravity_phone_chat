@@ -7,6 +7,11 @@
 
 **Antigravity Phone Connect** is a high-performance, real-time mobile monitor and remote control for your Antigravity AI sessions. It allows you to step away from your desk while keeping full sight and control over your AI's thinking process and generations.
 
+- **🚀 Lightning Fast Snapshots**: Sub-100ms mirroring of the Antigravity chat via Chrome DevTools Protocol (CDP).
+- **🛡️ Security First**: Built-in security audits, XSS protection via a strict Content Security Policy (No-Inline-JS), and encrypted session handling via signed `httpOnly` cookies.
+- **📱 Mobile-First History**: Access and switch conversation history from a sleek, full-screen mobile drawer with native-feel cards and micro-animations.
+- **🏠 One-Tap Connect**: Automatically trusts your local home Wi-Fi (LAN) for instant access, while maintaining a Zero-Trust policy with password protection for all external traffic.
+
 ![Antigravity Phone Connect](./assets/global_access_hero_2.png)
 
 **Note:** This project is a refined fork/extension based on the original [Antigravity Shit-Chat](https://github.com/gherghett/Antigravity-Shit-Chat) by gherghett.
