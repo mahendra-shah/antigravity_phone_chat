@@ -1,0 +1,17 @@
+[ {
+   "description": "",
+   "devtoolsFrontendUrl": "https://chrome-devtools-frontend.appspot.com/serve_rev/@cb10bb07c0a5dac19a421f7cbfd002146e74aaed/inspector.html?ws=127.0.0.1:9000/devtools/page/1F57C6F24254EB837916B66F816D73E0",
+   "id": "1F57C6F24254EB837916B66F816D73E0",
+   "title": "Remote Antigravity Control System",
+   "type": "page",
+   "url": "https://127.0.0.1:58900/c/01db19b2-c986-42c5-942f-f8223276e7ef?section=c8c2964d-57d3-42c6-917e-3a6ad812a332&tab=file__file%3A%2F%2F%2FUsers%2Fmahendra%2Fwork-dir%2Fopen-source%2Fantigravity_phone_chat%2Fsnapshot.html.txt%23L0-537",
+   "webSocketDebuggerUrl": "ws://127.0.0.1:9000/devtools/page/1F57C6F24254EB837916B66F816D73E0"
+}, {
+   "description": "",
+   "devtoolsFrontendUrl": "https://chrome-devtools-frontend.appspot.com/serve_rev/@cb10bb07c0a5dac19a421f7cbfd002146e74aaed/inspector.html?ws=127.0.0.1:9000/devtools/page/0820964BF2909670E3FBD1B6F6927382",
+   "id": "0820964BF2909670E3FBD1B6F6927382",
+   "title": "",
+   "type": "worker",
+   "url": "",
+   "webSocketDebuggerUrl": "ws://127.0.0.1:9000/devtools/page/0820964BF2909670E3FBD1B6F6927382"
+} ]

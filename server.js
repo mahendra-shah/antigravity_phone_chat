@@ -17,7 +17,11 @@ import { execSync } from 'child_process';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const PORTS = [9000, 9001, 9002, 9003];
+const PORTS = [9000, 9001, 9002, 9003, 63473, 64477, 64478];
+try {
+    const customPort = fs.readFileSync('/tmp/ag_cdp_port', 'utf8').trim();
+    if (customPort && !isNaN(customPort)) PORTS.unshift(parseInt(customPort));
+} catch(e) {}
 const POLL_INTERVAL = 1000; // 1 second
 const SERVER_PORT = process.env.PORT || 3000;
 const APP_PASSWORD = process.env.APP_PASSWORD || 'antigravity';
@@ -137,6 +141,12 @@ async function discoverCDP() {
                 console.log('Found Jetski/Launchpad target:', jetski.title);
                 return { port, url: jetski.webSocketDebuggerUrl };
             }
+            // Priority 3: Any "page" type target (Fallback for other Antigravity setups)
+            const fallback = list.find(t => t.type === 'page');
+            if (fallback && fallback.webSocketDebuggerUrl) {
+                console.log('Found fallback target:', fallback.title);
+                return { port, url: fallback.webSocketDebuggerUrl };
+            }
         } catch (e) {
             errors.push(`${port}: ${e.message}`);
         }
@@ -210,7 +220,12 @@ async function connectCDP(url) {
 // Capture chat snapshot
 async function captureSnapshot(cdp) {
     const CAPTURE_SCRIPT = `(async () => {
-        const cascade = document.getElementById('conversation') || document.getElementById('chat') || document.getElementById('cascade');
+        try {
+            if (window !== window.top) return { error: 'not_top_window' };
+            if (!document.querySelector('#conversation') && !document.querySelector('[data-testid="conversation-view"]')) {
+                return { error: 'no_conversation_found' };
+            }
+        const cascade = document.getElementById('conversation') || document.getElementById('chat') || document.getElementById('cascade') || document.querySelector('[data-testid="conversation-view"]');
         if (!cascade) {
             // Debug info
             const body = document.body;
@@ -339,20 +354,22 @@ async function captureSnapshot(cdp) {
             });
 
             // 3. NUCLEAR: If any editor or redundant UI remains, remove its entire branch
-            const redundantElements = clone.querySelectorAll('[contenteditable="true"], [data-lexical-editor], [role="textbox"], form, .mx-8.mb-8, .mx-4.mb-4');
+            const redundantElements = clone.querySelectorAll(
+                '[contenteditable="true"], [data-lexical-editor], [role="textbox"], form,' +
+                '.mx-8.mb-8, .mx-4.mb-4,' +
+                '[aria-label="Auxiliary Pane"], [aria-label="Left Sidebar"], [aria-label="Sidebar"], aside,' +
+                '[id="antigravity.agentSidePanelInputBox"],' +
+                '[aria-label="Message input"]' // ← removes the "Ask anything..." text that overlaps
+            );
             redundantElements.forEach(el => {
                 try {
-                    let branch = el;
-                    // Go up to find the highest container that is still within the clone
-                    // This ensures we remove the entire "box" (with chips, submit btn, etc)
-                    while (branch.parentElement && branch.parentElement !== clone) {
-                        const p = branch.parentElement;
-                        const pCls = (p.className || '').toString().toLowerCase();
-                        // Stop going up if we hit a main message/conversation wrapper
-                        if (pCls.includes('message') || pCls.includes('bubble') || pCls.includes('conversation')) break;
-                        branch = p;
+                    // For sidebars and asides, remove them directly without going up the branch
+                    const isSidebar = el.tagName.toLowerCase() === 'aside' || el.getAttribute('aria-label')?.includes('Sidebar') || el.getAttribute('aria-label') === 'Auxiliary Pane';
+                    if (isSidebar) {
+                        el.remove();
+                        return;
                     }
-                    if (branch && branch !== clone) branch.remove();
+
                     else el.remove();
                 } catch(e) {}
             });
@@ -424,7 +441,7 @@ async function captureSnapshot(cdp) {
             }
         } catch(e) {}
         
-        const html = clone.outerHTML;
+        const html = clone.outerHTML.replace(/\\bw-screen\\b/g, 'w-full').replace(/\\bh-screen\\b/g, 'h-full');
         
         const rules = [];
         for (const sheet of document.styleSheets) {
@@ -449,6 +466,9 @@ async function captureSnapshot(cdp) {
                 cssSize: allCSS.length
             }
         };
+        } catch (e) {
+            return { error: 'Capture script crashed: ' + e.message, debug: e.stack };
+        }
     })()`;
 
     for (const ctx of cdp.contexts) {
@@ -462,15 +482,15 @@ async function captureSnapshot(cdp) {
             });
 
             if (result.exceptionDetails) {
-                // console.log(`Context ${ctx.id} exception:`, result.exceptionDetails);
+                console.log(`Context ${ctx.id} exception:`, result.exceptionDetails.exception?.description || result.exceptionDetails.text);
                 continue;
             }
 
             if (result.result && result.result.value) {
                 const val = result.result.value;
                 if (val.error) {
-                    // console.log(`Context ${ctx.id} script error:`, val.error);
-                    // if (val.debug) console.log(`   Debug info:`, JSON.stringify(val.debug));
+                    console.log(`Context ${ctx.id} script error:`, val.error);
+                    if (val.debug) console.log(`   Debug info:`, JSON.stringify(val.debug));
                 } else {
                     return val;
                 }
@@ -485,60 +505,95 @@ async function captureSnapshot(cdp) {
 
 // Inject message into Antigravity
 async function injectMessage(cdp, text) {
-    // Use JSON.stringify for robust escaping (handles ", \, newlines, backticks, unicode, etc.)
-    const safeText = JSON.stringify(text);
+    const FOCUS_EXPRESSION = `(() => {
+        try {
+            const cancel = document.querySelector('[data-tooltip-id="input-send-button-cancel-tooltip"]');
+            if (cancel && cancel.offsetParent !== null) return { ok: false, reason: "busy" };
 
-    const EXPRESSION = `(async () => {
-        const cancel = document.querySelector('[data-tooltip-id="input-send-button-cancel-tooltip"]');
-        if (cancel && cancel.offsetParent !== null) return { ok:false, reason:"busy" };
+            const editors = [...document.querySelectorAll('[contenteditable="true"]')]
+                .filter(el => {
+                    if (el.offsetParent === null) return false;
+                    if (el.closest('aside') || el.closest('[aria-label="Sidebar"]') || el.closest('[aria-label="Auxiliary Pane"]')) return false;
+                    return true;
+                });
+            const editor = editors[0] || editors.at(-1);
+            if (!editor) return { error: "editor_not_found" };
 
-        const editors = [...document.querySelectorAll('#conversation [contenteditable="true"], #chat [contenteditable="true"], #cascade [contenteditable="true"]')]
-            .filter(el => el.offsetParent !== null);
-        const editor = editors.at(-1);
-        if (!editor) return { ok:false, error:"editor_not_found" };
-
-        const textToInsert = ${safeText};
-
-        editor.focus();
-        document.execCommand?.("selectAll", false, null);
-        document.execCommand?.("delete", false, null);
-
-        let inserted = false;
-        try { inserted = !!document.execCommand?.("insertText", false, textToInsert); } catch {}
-        if (!inserted) {
-            editor.textContent = textToInsert;
-            editor.dispatchEvent(new InputEvent("beforeinput", { bubbles:true, inputType:"insertText", data: textToInsert }));
-            editor.dispatchEvent(new InputEvent("input", { bubbles:true, inputType:"insertText", data: textToInsert }));
+            editor.focus();
+            document.execCommand("selectAll", false, null);
+            document.execCommand("delete", false, null);
+            return { ok: true };
+        } catch (e) {
+            return { error: e.message };
         }
+    })()`;
 
-        await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+    const SUBMIT_EXPRESSION = `(() => {
+        try {
+            const editors = [...document.querySelectorAll('[contenteditable="true"]')]
+                .filter(el => {
+                    if (el.offsetParent === null) return false;
+                    if (el.closest('aside') || el.closest('[aria-label="Sidebar"]') || el.closest('[aria-label="Auxiliary Pane"]')) return false;
+                    return true;
+                });
+            const editor = editors[0] || editors.at(-1);
+            if (!editor) return { error: "editor_not_found" };
 
-        const submit = document.querySelector("svg.lucide-arrow-right")?.closest("button");
-        if (submit && !submit.disabled) {
-            submit.click();
-            return { ok:true, method:"click_submit" };
+            const submit = document.querySelector('button[aria-label*="Send"], button[aria-label*="Message"], button:has(svg.lucide-arrow-right), button:has(svg.lucide-send)') || document.querySelector("svg.lucide-arrow-right")?.closest("button");
+            if (submit && !submit.disabled) {
+                submit.click();
+                return { ok: true, method: "click_submit" };
+            }
+
+            // Fallback: Dispatch full sequence of Enter events
+            const enterDown = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Enter", code: "Enter", keyCode: 13, which: 13 });
+            editor.dispatchEvent(enterDown);
+            const enterUp = new KeyboardEvent("keyup", { bubbles: true, cancelable: true, key: "Enter", code: "Enter", keyCode: 13, which: 13 });
+            editor.dispatchEvent(enterUp);
+            return { ok: true, method: "enter_keypress" };
+        } catch (e) {
+            return { error: e.message };
         }
-
-        // Submit button not found, but text is inserted - trigger Enter key
-        editor.dispatchEvent(new KeyboardEvent("keydown", { bubbles:true, key:"Enter", code:"Enter" }));
-        editor.dispatchEvent(new KeyboardEvent("keyup", { bubbles:true, key:"Enter", code:"Enter" }));
-        
-        return { ok:true, method:"enter_keypress" };
     })()`;
 
     for (const ctx of cdp.contexts) {
         try {
-            const result = await cdp.call("Runtime.evaluate", {
-                expression: EXPRESSION,
+            // Step 1: Focus and Clear
+            const focusRes = await cdp.call("Runtime.evaluate", {
+                expression: FOCUS_EXPRESSION,
                 returnByValue: true,
                 awaitPromise: true,
                 contextId: ctx.id
             });
 
-            if (result.result && result.result.value) {
-                return result.result.value;
+            if (focusRes.result?.value?.error) {
+                continue; // Try next context
             }
-        } catch (e) { }
+
+            if (focusRes.result?.value?.reason === "busy") {
+                return { ok: false, reason: "busy" };
+            }
+
+            // Step 2: Native CDP Text Injection
+            await cdp.call("Input.insertText", { text: text });
+
+            // Wait a brief tick for UI to process text insertion
+            await new Promise(r => setTimeout(r, 100));
+
+            // Step 3: Click Submit / Press Enter
+            const submitRes = await cdp.call("Runtime.evaluate", {
+                expression: SUBMIT_EXPRESSION,
+                returnByValue: true,
+                awaitPromise: true,
+                contextId: ctx.id
+            });
+
+            if (submitRes.result?.value) {
+                return submitRes.result.value;
+            }
+        } catch (e) {
+            console.error("CDP inject error in context " + ctx.id + ":", e.message);
+        }
     }
 
     return { ok: false, reason: "no_context" };
@@ -736,39 +791,44 @@ async function clickElement(cdp, { selector, index, textContent }) {
 }
 
 // Remote scroll - sync phone scroll to desktop
-async function remoteScroll(cdp, { scrollTop, scrollPercent }) {
-    // Try to scroll the chat container in Antigravity
+async function remoteScroll(cdp, { scrollTop, scrollPercent, direction, amount }) {
+    const safeDirection = direction ? JSON.stringify(direction) : 'null';
+    const safeAmount = amount !== undefined ? amount : 400;
+    const safeScrollTop = scrollTop !== undefined ? scrollTop : 'undefined';
+    const safeScrollPercent = scrollPercent !== undefined ? scrollPercent : 'undefined';
+
     const EXPRESSION = `(async () => {
         try {
-            // Find the main scrollable chat container
-            const scrollables = [...document.querySelectorAll('#conversation [class*="scroll"], #chat [class*="scroll"], #cascade [class*="scroll"], #conversation [style*="overflow"], #chat [style*="overflow"], #cascade [style*="overflow"]')]
-                .filter(el => el.scrollHeight > el.clientHeight);
+            const cascade = document.getElementById('conversation') || document.getElementById('chat') || document.getElementById('cascade') || document.querySelector('[data-testid="conversation-view"]');
+            if (!cascade) return { error: 'Cascade container not found' };
+            const target = cascade.querySelector('.overflow-y-auto, [data-scroll-area]') || cascade;
             
-            // Also check for the main chat area
-            const chatArea = document.querySelector('#conversation .overflow-y-auto, #chat .overflow-y-auto, #cascade .overflow-y-auto, #conversation [data-scroll-area], #chat [data-scroll-area], #cascade [data-scroll-area]');
-            if (chatArea) scrollables.unshift(chatArea);
+            const oldScrollTop = target.scrollTop;
             
-            if (scrollables.length === 0) {
-                // Fallback: scroll the main container element
-                const cascade = document.getElementById('conversation') || document.getElementById('chat') || document.getElementById('cascade');
-                if (cascade && cascade.scrollHeight > cascade.clientHeight) {
-                    scrollables.push(cascade);
-                }
-            }
-            
-            if (scrollables.length === 0) return { error: 'No scrollable element found' };
-            
-            const target = scrollables[0];
-            
-            // Use percentage-based scrolling for better sync
-            if (${scrollPercent} !== undefined) {
+            if (${safeScrollTop} !== undefined) {
+                target.scrollTop = ${safeScrollTop};
+            } else if (${safeScrollPercent} !== undefined) {
                 const maxScroll = target.scrollHeight - target.clientHeight;
-                target.scrollTop = maxScroll * ${scrollPercent};
-            } else {
-                target.scrollTop = ${scrollTop || 0};
+                target.scrollTop = maxScroll * ${safeScrollPercent};
+            } else if (${safeDirection} === "up") {
+                target.scrollTop = Math.max(0, target.scrollTop - ${safeAmount});
+            } else if (${safeDirection} === "down") {
+                target.scrollTop = Math.min(target.scrollHeight - target.clientHeight, target.scrollTop + ${safeAmount});
             }
             
-            return { success: true, scrolled: target.scrollTop };
+            // Dispatch scroll events to notify frameworks
+            target.dispatchEvent(new Event('scroll', { bubbles: true }));
+            
+            // Shake the scroll if we hit the top to wake up virtualized scrollers
+            if (target.scrollTop <= 10) {
+                target.scrollTop = 20;
+                target.dispatchEvent(new Event('scroll', { bubbles: true }));
+                await new Promise(r => setTimeout(r, 50));
+                target.scrollTop = 0;
+                target.dispatchEvent(new Event('scroll', { bubbles: true }));
+            }
+            
+            return { success: true, oldScroll: oldScrollTop, newScroll: target.scrollTop };
         } catch(e) {
             return { error: e.toString() };
         }
@@ -1002,176 +1062,72 @@ async function getChatHistory(cdp) {
             const chats = [];
             const seenTitles = new Set();
 
-            // Priority 1: Look for tooltip ID pattern (history/past/recent)
-            let historyBtn = document.querySelector('[data-tooltip-id*="history"], [data-tooltip-id*="past"], [data-tooltip-id*="recent"], [data-tooltip-id*="conversation-history"]');
-            
-            // Priority 2: Look for button ADJACENT to the new chat button
-            if (!historyBtn) {
-                const newChatBtn = document.querySelector('[data-tooltip-id="new-conversation-tooltip"]');
-                if (newChatBtn) {
-                    const parent = newChatBtn.parentElement;
-                    if (parent) {
-                        const siblings = Array.from(parent.children).filter(el => el !== newChatBtn);
-                        historyBtn = siblings.find(el => el.tagName === 'A' || el.tagName === 'BUTTON' || el.getAttribute('role') === 'button');
-                    }
-                }
+            // Direct approach: read from the [aria-label="Sidebar"] element which always exists
+            const sidebar = document.querySelector('aside') || document.querySelector('[aria-label="Sidebar"]') || document.querySelector('[aria-label="Left Sidebar"]');
+            if (!sidebar) {
+                return { error: 'Sidebar not found', chats: [] };
             }
 
-            // Fallback: Use previous heuristics (icon/aria-label)
-            if (!historyBtn) {
-                const allButtons = Array.from(document.querySelectorAll('button, [role="button"], a[data-tooltip-id]'));
-                for (const btn of allButtons) {
-                    if (btn.offsetParent === null) continue;
-                    const hasHistoryIcon = btn.querySelector('svg.lucide-clock') ||
-                                           btn.querySelector('svg.lucide-history') ||
-                                           btn.querySelector('svg.lucide-folder') ||
-                                           btn.querySelector('svg[class*="clock"]') ||
-                                           btn.querySelector('svg[class*="history"]');
-                    if (hasHistoryIcon) {
-                        historyBtn = btn;
+            // Scroll the sidebar to load virtualized elements
+            const scrollContainer = sidebar.querySelector('[class*="scroll"], [style*="overflow"]') || sidebar;
+            let lastLen = 0;
+            let noChangeCount = 0;
+            
+            for (let i = 0; i < 15; i++) {
+                const currentSpans = sidebar.querySelectorAll('span.truncate');
+                if (currentSpans.length === lastLen) {
+                    noChangeCount++;
+                    if (noChangeCount >= 2) break; // Reached bottom
+                } else {
+                    noChangeCount = 0;
+                    lastLen = currentSpans.length;
+                }
+                scrollContainer.scrollTop = scrollContainer.scrollHeight;
+                await new Promise(r => setTimeout(r, 150));
+            }
+
+            // Target: span with class "truncate" inside the sidebar
+            const titleSpans = Array.from(sidebar.querySelectorAll('span.truncate'));
+            
+            // Section headers / UI labels to skip
+            const SKIP_EXACT = new Set([
+                'new conversation', 'conversation history', 'scheduled tasks',
+                'current', 'other conversations', 'now',
+                'projects', 'personal', 'workspace', 'default',
+                'phone connect antigravity', 'display options',
+                'new conversation in project', 'settings'
+            ]);
+            
+            for (const span of titleSpans) {
+                const text = (span.textContent || '').trim();
+                if (!text || text.length < 3 || text.length > 120) continue;
+                const lower = text.toLowerCase();
+                if (SKIP_EXACT.has(lower)) continue;
+                if (lower.endsWith(' ago') || /^\d+\s*(sec|min|hr|day|wk|mo|yr)/i.test(lower)) continue;
+                if (lower.startsWith('show ') && lower.includes('more')) continue;
+                if (seenTitles.has(text)) continue;
+                seenTitles.add(text);
+                
+                // Try to find a project/section label nearby
+                let project = 'Recent';
+                let parentEl = span.parentElement;
+                for (let i = 0; i < 8 && parentEl; i++) {
+                    const header = parentEl.querySelector('h2, h3, p[class*="text-xs"], span[class*="text-xs"]');
+                    if (header) {
+                        const headerText = (header.textContent || '').trim();
+                        if (headerText && headerText.length < 50 && !SKIP_EXACT.has(headerText.toLowerCase())) {
+                            project = headerText;
+                        }
                         break;
                     }
-                }
-            }
-            
-            if (!historyBtn) {
-                return { error: 'History button not found', chats: [] };
-            }
-
-            // Click and Wait
-            historyBtn.click();
-            await new Promise(r => setTimeout(r, 2000));
-            
-            // Find the side panel
-            let panel = null;
-            let inputsFoundDebug = [];
-            
-            // Strategy 1: The search input has specific placeholder
-            let searchInput = null;
-            const inputs = Array.from(document.querySelectorAll('input'));
-            searchInput = inputs.find(i => {
-                const ph = (i.placeholder || '').toLowerCase();
-                return ph.includes('select') || ph.includes('conversation');
-            });
-            
-            // Strategy 2: Look for any text input that looks like a search bar (based on user snippet classes)
-            if (!searchInput) {
-                const allInputs = Array.from(document.querySelectorAll('input[type="text"]'));
-                inputsFoundDebug = allInputs.map(i => 'ph:' + i.placeholder + ', cls:' + i.className);
-                
-                searchInput = allInputs.find(i => 
-                    i.offsetParent !== null && 
-                    (i.className.includes('w-full') || i.classList.contains('w-full'))
-                );
-            }
-            
-            // Strategy 3: Find known text in the panel (Anchor Text Strategy)
-            let anchorElement = null;
-            if (!searchInput) {
-                 const allSpans = Array.from(document.querySelectorAll('span, div, p'));
-                 anchorElement = allSpans.find(s => {
-                     const t = (s.innerText || '').trim();
-                     return t === 'Current' || t === 'Refining Chat History Scraper'; // specific known title
-                 });
-            }
-
-            const startElement = searchInput || anchorElement;
-
-            if (startElement) {
-                // Walk up to find the panel container
-                let container = startElement;
-                for (let i = 0; i < 15; i++) { 
-                    if (!container.parentElement) break;
-                    container = container.parentElement;
-                    const rect = container.getBoundingClientRect();
-                    
-                    // Panel should have good dimensions
-                    // Relaxed constraints for mobile
-                    if (rect.width > 50 && rect.height > 100) {
-                        panel = container;
-                        
-                        // If it looks like a modal/popover (fixed or absolute pos), that's definitely it
-                        const style = window.getComputedStyle(container);
-                        if (style.position === 'fixed' || style.position === 'absolute' || style.zIndex > 10) {
-                            break;
-                        }
-                    }
+                    parentEl = parentEl.parentElement;
                 }
                 
-                // Fallback if loop finishes without specific break
-                if (!panel && startElement) {
-                     // Just go up 4 levels
-                     let p = startElement;
-                     for(let k=0; k<4; k++) { if(p.parentElement) p = p.parentElement; }
-                     panel = p;
-                }
+                chats.push({ title: text, project, date: 'Recent' });
+                if (chats.length >= 60) break;
             }
-            
-            const debugInfo = { 
-                panelFound: !!panel, 
-                panelWidth: panel?.offsetWidth || 0,
-                inputFound: !!searchInput,
-                anchorFound: !!anchorElement,
-                inputsDebug: inputsFoundDebug.slice(0, 5)
-            };
-            
-            if (panel) {
-                // Chat titles are in <span> elements
-                const spans = Array.from(panel.querySelectorAll('span'));
-                
-                // Section headers and workspace labels to skip
-                const SKIP_EXACT = new Set([
-                    'current', 'other conversations', 'now',
-                    'projects', 'personal', 'workspace', 'default', 'phone connect antigravity'
-                ]);
-                
-                for (const span of spans) {
-                    const text = span.textContent?.trim() || '';
-                    const lower = text.toLowerCase();
-                    
-                    // Skip empty or too short
-                    if (text.length < 3) continue;
 
-                    // Sibling-span heuristic: skip tag/badge labels (like workspaces)
-                    // If a short span has a longer sibling span, it's likely a tag next to the actual title
-                    if (text.length < 40 && span.parentElement) {
-                        let hasLongerSiblingSpan = false;
-                        for (const child of span.parentElement.children) {
-                            if (child !== span && child.tagName === 'SPAN') {
-                                const childTextLength = (child.textContent?.trim() || '').length;
-                                if (childTextLength > text.length) {
-                                    hasLongerSiblingSpan = true;
-                                    break;
-                                }
-                            }
-                        }
-                        if (hasLongerSiblingSpan) continue;
-                    }
-                    
-                    // Skip section headers
-                    if (SKIP_EXACT.has(lower)) continue;
-                    if (lower.startsWith('recent in ')) continue;
-                    if (lower.startsWith('show ') && lower.includes('more')) continue;
-                    
-                    // Skip timestamps
-                    if (lower.endsWith(' ago') || /^\\d+\\s*(sec|min|hr|day|wk|mo|yr)/i.test(lower)) continue;
-                    
-                    // Skip very long text (containers)
-                    if (text.length > 100) continue;
-                    
-                    // Skip duplicates
-                    if (seenTitles.has(text)) continue;
-                    
-                    seenTitles.add(text);
-                    chats.push({ title: text, date: 'Recent' });
-                    
-                    if (chats.length >= 50) break;
-                }
-            }
-            
-            // Note: Panel is left open on PC as requested ("launch history on pc")
-
-            return { success: true, chats: chats, debug: debugInfo };
+            return { success: true, chats };
         } catch(e) {
             return { error: e.toString(), chats: [] };
         }
@@ -1187,7 +1143,6 @@ async function getChatHistory(cdp) {
                 contextId: ctx.id
             });
             if (res.result?.value) return res.result.value;
-            // If result.value is null/undefined but no error thrown, check exceptionDetails
             if (res.exceptionDetails) {
                 lastError = res.exceptionDetails.exception?.description || res.exceptionDetails.text;
             }
@@ -1375,6 +1330,26 @@ async function selectChat(cdp, chatTitle) {
             document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true }));
             document.dispatchEvent(new KeyboardEvent('keyup', { key: 'Escape', code: 'Escape', bubbles: true }));
 
+            // 6. Programmatically load old history by scrolling up multiple times in the background
+            try {
+                const cascade = document.getElementById('conversation') || document.getElementById('chat') || document.getElementById('cascade') || document.querySelector('[data-testid="conversation-view"]');
+                if (cascade) {
+                    const scrollContainer = cascade.querySelector('.overflow-y-auto, [data-scroll-area]') || cascade;
+                    if (scrollContainer) {
+                        for (let j = 0; j < 8; j++) {
+                            const lastHeight = scrollContainer.scrollHeight;
+                            scrollContainer.scrollTop = 0;
+                            await new Promise(r => setTimeout(r, 300));
+                            if (scrollContainer.scrollHeight === lastHeight) {
+                                break;
+                            }
+                        }
+                        // Scroll back to the bottom
+                        scrollContainer.scrollTop = scrollContainer.scrollHeight;
+                    }
+                }
+            } catch (e) {}
+
             return { success: true, method: 'heuristic_click', bestMatch: candidates[0].text, retried: isPanelStillOpen, debug: debugInfo };
         } catch (e) {
             return { error: 'JS Exception: ' + e.toString() };
@@ -1514,6 +1489,11 @@ async function getAppState(cdp) {
         if (modelEl) {
             state.model = modelEl.innerText.trim();
         }
+
+        // 3. Get Generation Status (Stop/Cancel button visibility)
+        const inputArea = document.querySelector('[data-testid="chat-input"]') || document.getElementById('cascade') || document.body;
+        const cancel = inputArea.querySelector('[data-tooltip-id="input-send-button-cancel-tooltip"]') || inputArea.querySelector('button[aria-label*="Stop"], button[aria-label*="Cancel"], button:has(svg.lucide-square)');
+        state.isGenerating = !!(cancel && cancel.offsetParent !== null);
 
         return state;
     } catch (e) { return { error: e.toString() }; }
@@ -1667,7 +1647,8 @@ async function createServer() {
     let server;
     let httpsServer = null;
 
-    if (hasSSL) {
+    const forceHttp = process.env.FORCE_HTTP === '1';
+    if (hasSSL && !forceHttp) {
         const sslOptions = {
             key: fs.readFileSync(keyPath),
             cert: fs.readFileSync(certPath)
@@ -1686,6 +1667,10 @@ async function createServer() {
 
     app.use(compression());
     app.use(express.json());
+    app.use((req, res, next) => {
+        console.log(`[REQUEST] ${req.method} ${req.url}`);
+        next();
+    });
 
     // Use a secure session secret from .env if available
     const sessionSecret = process.env.SESSION_SECRET || 'antigravity_secret_key_1337';
@@ -2153,9 +2138,9 @@ async function main() {
 
         // Remote Scroll - sync phone scroll to desktop
         app.post('/remote-scroll', async (req, res) => {
-            const { scrollTop, scrollPercent } = req.body;
+            const { scrollTop, scrollPercent, direction, amount } = req.body;
             if (!cdpConnection) return res.status(503).json({ error: 'CDP disconnected' });
-            const result = await remoteScroll(cdpConnection, { scrollTop, scrollPercent });
+            const result = await remoteScroll(cdpConnection, { scrollTop, scrollPercent, direction, amount });
             res.json(result);
         });
 
@@ -2171,6 +2156,82 @@ async function main() {
             if (!cdpConnection) return res.status(503).json({ error: 'CDP disconnected' });
             const result = await startNewChat(cdpConnection);
             res.json(result);
+        });
+
+        // Get Sidebar/Auxiliary Pane content (for right panel drawer)
+        app.get('/sidebar-content', async (req, res) => {
+            if (!cdpConnection) return res.json({ found: false, html: '', error: 'CDP disconnected' });
+            let lastError = null;
+            const EXP = `(async () => {
+                try {
+                    // Find the right-side panel by layout (Artifacts pane)
+                    const allDivs = Array.from(document.querySelectorAll('div'));
+                    const auxPane = allDivs.find(el => {
+                        if (el.id === 'root') return false;
+                        const r = el.getBoundingClientRect();
+                        return r.width > 200 && r.width < 800 && r.right > window.innerWidth - 100 && r.top < 100 && el.parentElement && el.parentElement.id !== 'root';
+                    });
+                    
+                    if (auxPane && auxPane.offsetWidth > 50 && auxPane.offsetHeight > 50) {
+                        // 1. Dynamic Tabs Extraction
+                        const tabElements = Array.from(auxPane.querySelectorAll('button, [role="tab"]'))
+                            .filter(el => {
+                                const text = el.innerText.trim();
+                                return ['Overview', 'Review', 'Artifact', 'Code', 'Plan'].includes(text);
+                            });
+                        
+                        const tabs = tabElements.map(el => el.innerText.trim());
+                        
+                        // Find active tab
+                        const activeTabEl = tabElements.find(el => {
+                            const className = el.className || '';
+                            return className.includes('active') || className.includes('selected') || el.getAttribute('aria-selected') === 'true' || el.getAttribute('data-state') === 'active';
+                        });
+                        const activeTab = activeTabEl ? activeTabEl.innerText.trim() : (tabs[0] || '');
+
+                        // Hide the desktop tab bar container in the clone
+                        if (tabElements.length > 0) {
+                            const tabParent = tabElements[0].parentElement;
+                            if (tabParent && tabParent !== auxPane) {
+                                tabParent.setAttribute('data-ag-desktop-tabs', 'true');
+                            }
+                        }
+
+                        // 2. CSS Stylesheets Extraction (Syntax highlighting)
+                        const cssRules = [];
+                        try {
+                            for (const sheet of document.styleSheets) {
+                                try {
+                                    for (const rule of sheet.cssRules) {
+                                        const sel = rule.selectorText || '';
+                                        if (sel.includes('code') || sel.includes('monaco') || sel.includes('diff') || sel.includes('token') || sel.includes('editor') || sel.includes('tab') || sel.includes('aux')) {
+                                            cssRules.push(rule.cssText);
+                                        }
+                                    }
+                                } catch(e) {}
+                            }
+                        } catch(e) {}
+                        const css = cssRules.join('\\n');
+
+                        return { found: true, html: auxPane.innerHTML, css, tabs, activeTab };
+                    }
+                    // Nothing open
+                    return { found: false, html: '' };
+                } catch(e) {
+                    return { error: e.toString() };
+                }
+            })()`;
+            for (const ctx of cdpConnection.contexts) {
+                try {
+                    const evalResult = await cdpConnection.call('Runtime.evaluate', {
+                        expression: EXP, returnByValue: true, awaitPromise: true, contextId: ctx.id
+                    });
+                    if (evalResult.result?.value) {
+                        return res.json(evalResult.result.value);
+                    }
+                } catch(e) { lastError = e.message; }
+            }
+            res.json({ found: false, html: '', error: lastError || 'No context matched' });
         });
 
         // Get Chat History
@@ -2208,10 +2269,11 @@ async function main() {
 
         // Start server
         const localIP = getLocalIP();
-        const protocol = hasSSL ? 'https' : 'http';
+        const isHttps = hasSSL && process.env.FORCE_HTTP !== '1';
+        const protocol = isHttps ? 'https' : 'http';
         server.listen(SERVER_PORT, '0.0.0.0', () => {
             console.log(`🚀 Server running on ${protocol}://${localIP}:${SERVER_PORT}`);
-            if (hasSSL) {
+            if (isHttps) {
                 console.log(`💡 First time on phone? Accept the security warning to proceed.`);
             }
         });

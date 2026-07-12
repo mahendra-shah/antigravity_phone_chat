@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <link rel="stylesheet" href="/css/style.css">
+    <script>
+        fetch('/snapshot').then(r=>r.json()).then(data => {
+            const cc = document.getElementById('chatContent');
+            cc.innerHTML = data.html;
+            let styleTag = document.createElement('style');
+            styleTag.textContent = data.css;
+            document.head.appendChild(styleTag);
+        });
+    </script>
+</head>
+<body>
+    <div class="chat-container" id="chatContainer" style="height: 100vh;">
+        <div class="chat-content" id="chatContent">
+            Loading...
+        </div>
+    </div>
+</body>
+</html>

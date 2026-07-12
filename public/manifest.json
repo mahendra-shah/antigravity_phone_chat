@@ -1,0 +1,16 @@
+{
+    "name": "Antigravity Phone Connect",
+    "short_name": "Antigravity",
+    "start_url": "./",
+    "display": "standalone",
+    "background_color": "#09090b",
+    "theme_color": "#09090b",
+    "description": "Remote control for Antigravity Desktop Agent",
+    "icons": [
+        {
+            "src": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA1MTIgNTEyIj48cmVjdCB3aWR0aD0iNTEyIiBoZWlnaHQ9IjUxMiIgZmlsbD0iIzA5MDkwYiIgcng9IjExMCIvPjxwYXRoIGQ9Ik0yNTYgMTM2YzY2LjI3IDAgMTIwIDUzLjczIDEyMCAxMjBzLTUzLjczIDEyMC0xMjAgMTIwLTEyMC01My43My0xMjAtMTIwIDUzLjczLTEyMCAxMjAtMTIwem0wIDE4MWMtMzMuNjkgMC02MS0yNy4zMS02MS02MXMyNy4zMS02MSA2MS02MSA2MSAyNy4zMSA2MSA2MS0yNy4zMSA2MS02MSA2MXoiIGZpbGw9IiM2MGE1ZmEiLz48L3N2Zz4=",
+            "sizes": "192x192 512x512",
+            "type": "image/svg+xml"
+        }
+    ]
+}

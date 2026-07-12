@@ -18,11 +18,11 @@ fi
 
 # Check for Python
 if command -v python3 &> /dev/null; then
-    PYTHON_CMD="python3"
+    PYTHON_CMD="python3 -u"
 elif command -v python &> /dev/null; then
     PYTHON_CMD="python"
 else
-    echo "[ERROR] Python is not installed. Please install Python to run the launcher."
+    echo "[ERROR] Python is not installed. Please install Python to run python3 -u launcher.py"
     exit 1
 fi
 

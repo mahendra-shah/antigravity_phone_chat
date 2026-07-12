@@ -68,7 +68,7 @@ if [ -f "venv/bin/activate" ]; then
     source venv/bin/activate
 fi
 
-python3 launcher.py --mode web
+python3 -u launcher.py --mode web --provider ngrok
 
 # 6. Auto-close when done
 exit 0

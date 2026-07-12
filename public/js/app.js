@@ -1,231 +1,284 @@
-// --- Elements ---
-const chatContainer = document.getElementById('chatContainer');
-const chatContent = document.getElementById('chatContent');
-const messageInput = document.getElementById('messageInput');
-const sendBtn = document.getElementById('sendBtn');
+// ─────────────────────────────────────────────────────────────
+//  Antigravity Phone Connect — app.js v5
+// ─────────────────────────────────────────────────────────────
+
+// ── Element References ──
+const chatContainer    = document.getElementById('chatContainer');
+const chatContent      = document.getElementById('chatContent');
+const messageInput     = document.getElementById('messageInput');
+const sendBtn          = document.getElementById('sendBtn');
 const scrollToBottomBtn = document.getElementById('scrollToBottom');
-const statusDot = document.getElementById('statusDot');
-const statusText = document.getElementById('statusText');
-const refreshBtn = document.getElementById('refreshBtn');
-const stopBtn = document.getElementById('stopBtn');
-const newChatBtn = document.getElementById('newChatBtn');
-const historyBtn = document.getElementById('historyBtn');
-
-const modeBtn = document.getElementById('modeBtn');
-const modelBtn = document.getElementById('modelBtn');
-const modalOverlay = document.getElementById('modalOverlay');
-const modalList = document.getElementById('modalList');
-const modalTitle = document.getElementById('modalTitle');
-const modeText = document.getElementById('modeText');
-const modelText = document.getElementById('modelText');
-const historyLayer = document.getElementById('historyLayer');
-const historyList = document.getElementById('historyList');
-
-// New elements for event listeners
-const enableHttpsBtn = document.getElementById('enableHttpsBtn');
-const dismissSslBtn = document.querySelector('.dismiss-btn');
-const closeModalBtn = document.getElementById('closeModalBtn');
-const supportBtn = document.getElementById('supportBtn');
-const supportOverlay = document.getElementById('supportOverlay');
-const closeSupportBtn = document.getElementById('closeSupportBtn');
-const backHistoryBtn = document.querySelector('.history-header .icon-btn');
+const statusDot        = document.getElementById('statusDot');
+const statusText       = document.getElementById('statusText');
+const refreshBtn       = document.getElementById('refreshBtn');
+const stopBtn          = document.getElementById('stopBtn');
+const newChatBtn       = document.getElementById('newChatBtn');
+const hamburgerBtn     = document.getElementById('hamburgerBtn');
+const modeBtn          = document.getElementById('modeBtn');
+const modelBtn         = document.getElementById('modelBtn');
+const modalOverlay     = document.getElementById('modalOverlay');
+const modalList        = document.getElementById('modalList');
+const modalTitle       = document.getElementById('modalTitle');
+const modeText         = document.getElementById('modeText');
+const modelText        = document.getElementById('modelText');
+const sidebarMenu      = document.getElementById('sidebarMenu');
+const sidebarOverlay   = document.getElementById('sidebarOverlay');
+const historyList      = document.getElementById('historyList');
+const closeSidebarBtn  = document.getElementById('closeSidebarBtn');
+// Panel Drawer (right)
+const panelDrawer      = document.getElementById('panelDrawer');
+const panelOverlay     = document.getElementById('panelOverlay');
+const panelHamburgerBtn = document.getElementById('panelHamburgerBtn');
+const closePanelDrawerBtn = document.getElementById('closePanelDrawerBtn');
+const panelDrawerContent = document.getElementById('panelDrawerContent');
+// Input
+const attachBtn        = document.getElementById('attachBtn');
+const fileInput        = document.getElementById('fileInput');
+const attachedFiles    = document.getElementById('attachedFiles');
+// Usage
+const usageBarFill     = document.getElementById('usageBarFill');
+const usageLabel       = document.getElementById('usageLabel');
+const toast            = document.getElementById('toast');
+const enableHttpsBtn   = document.getElementById('enableHttpsBtn');
+const dismissSslBtn    = document.querySelector('.dismiss-btn');
+const closeModalBtn    = document.getElementById('closeModalBtn');
+const supportBtn       = document.getElementById('supportBtn');
+const supportOverlay   = document.getElementById('supportOverlay');
+const closeSupportBtn  = document.getElementById('closeSupportBtn');
 const quickActionChips = document.querySelectorAll('.action-chip');
+const sslBanner        = document.getElementById('sslBanner');
 
-// --- State ---
-let autoRefreshEnabled = true;
-let userIsScrolling = false;
-let userScrollLockUntil = 0; // Timestamp until which we respect user scroll
-let lastScrollPosition = 0;
-let ws = null;
-let idleTimer = null;
-let lastHash = '';
-let currentMode = 'Fast';
-let chatIsOpen = true; // Track if a chat is currently open
+// ── Device detection ──
+const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 
+// ── State ──
+let autoRefreshEnabled  = true;
+let userIsScrolling     = false;
+let userScrollLockUntil = 0;
+let lastScrollPosition  = 0;
+let ws                  = null;
+let idleTimer           = null;
+let lastHash            = '';
+let currentMode         = 'Fast';
+let chatIsOpen          = true;
+let panelOpen           = false;
+let panelPollTimer      = null;
+let lastPanelHash       = '';
+let pendingAttachments  = []; // {file, name, dataUrl, type}
+let hasEverRenderedContent = false; // Guard: never blank if content was once shown
+let lastGoodHTML        = ''; // Guard: keep last good HTML
+let consecutiveFailures = 0; // Track failures before showing empty state
+const USER_SCROLL_LOCK_DURATION = 3000;
 
-// --- Auth Utilities ---
+// ── Toast Helper ──
+let toastTimer = null;
+function showToast(msg, type = '', duration = 2500) {
+    if (!toast) return;
+    toast.textContent = msg;
+    toast.className = 'toast show' + (type ? ' ' + type : '');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => {
+        toast.classList.remove('show');
+    }, duration);
+}
+
+// ── Auth ──
 async function fetchWithAuth(url, options = {}) {
-    // Add ngrok skip warning header to all requests
     if (!options.headers) options.headers = {};
     options.headers['ngrok-skip-browser-warning'] = 'true';
-
     try {
         const res = await fetch(url, options);
         if (res.status === 401) {
-            console.log('[AUTH] Unauthorized, redirecting to login...');
             window.location.href = '/login.html';
-            return new Promise(() => { }); // Halt execution
+            return new Promise(() => {});
         }
         return res;
-    } catch (e) {
-        throw e;
-    }
+    } catch (e) { throw e; }
 }
-const USER_SCROLL_LOCK_DURATION = 3000; // 3 seconds of scroll protection
 
-// --- Sync State (Desktop is Always Priority) ---
+// ── SSL Banner ──
+async function checkSslStatus() {
+    if (window.location.protocol === 'https:') return;
+    if (localStorage.getItem('sslBannerDismissed')) return;
+    if (sslBanner) sslBanner.style.display = 'flex';
+}
+async function enableHttps() {
+    const btn = enableHttpsBtn;
+    btn.textContent = 'Generating...'; btn.disabled = true;
+    try {
+        const res  = await fetchWithAuth('/generate-ssl', { method: 'POST' });
+        const data = await res.json();
+        if (data.success) {
+            sslBanner.innerHTML = `<span>✅ ${data.message}</span><button id="sslReloadBtn">Reload</button>`;
+            const r = document.getElementById('sslReloadBtn');
+            if (r) r.addEventListener('click', () => location.reload());
+        } else { btn.textContent = 'Failed'; btn.disabled = false; }
+    } catch(e) { btn.textContent = 'Error'; btn.disabled = false; }
+}
+function dismissSslBanner() {
+    if (sslBanner) sslBanner.style.display = 'none';
+    localStorage.setItem('sslBannerDismissed', 'true');
+}
+checkSslStatus();
+
+// ── Models / Modes ──
+const MODELS = [
+    { name: "Gemini 3.1 Pro (High)", limit: "2,000,000" },
+    { name: "Gemini 3.1 Pro (Low)", limit: "1,000,000" },
+    { name: "Gemini 3 Flash", limit: "1,000,000" },
+    { name: "Claude Sonnet 4.6 (Thinking)", limit: "200,000" },
+    { name: "Claude Opus 4.6 (Thinking)", limit: "200,000" },
+    { name: "GPT-OSS 120B (Medium)", limit: "128,000" }
+];
+
+// ── Scroll Event Listener for Loading Older Messages ──
+let lastScrollTop = 0;
+let isFetchingOlder = false;
+chatContainer.addEventListener('scroll', async () => {
+    // If scrolled near the top and we're scrolling up
+    if (chatContainer.scrollTop < 100 && chatContainer.scrollTop < lastScrollTop && !isFetchingOlder) {
+        isFetchingOlder = true;
+        try {
+            await fetchWithAuth('/remote-scroll', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ direction: 'up', amount: 800 })
+            });
+            setTimeout(loadSnapshot, 500);
+            setTimeout(loadSnapshot, 1500);
+        } catch(e) {}
+        setTimeout(() => isFetchingOlder = false, 2000); // debounce
+    }
+    lastScrollTop = chatContainer.scrollTop;
+});
+
+// ── App State (mode, model, usage) ──
 async function fetchAppState() {
     try {
-        const res = await fetchWithAuth('/app-state');
+        const res  = await fetchWithAuth('/app-state');
         const data = await res.json();
+        
+        // Update send button to stop button if generating
+        if (sendBtn) {
+            if (data.isGenerating) {
+                sendBtn.classList.add('generating');
+                sendBtn.innerHTML = `
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                        <rect x="5" y="5" width="14" height="14" rx="2" />
+                    </svg>`;
+                sendBtn.style.color = '#ef4444'; // Red color for Stop
+            } else {
+                sendBtn.classList.remove('generating');
+                sendBtn.innerHTML = `
+                    <svg viewBox="0 0 24 24" width="16" height="16">
+                        <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
+                    </svg>`;
+                sendBtn.style.color = ''; // Reset
+            }
+        }
 
-        // Mode Sync (Fast/Planning) - Desktop is source of truth
         if (data.mode && data.mode !== 'Unknown') {
             modeText.textContent = data.mode;
             modeBtn.classList.toggle('active', data.mode === 'Planning');
             currentMode = data.mode;
         }
-
-        // Model Sync - Desktop is source of truth
         if (data.model && data.model !== 'Unknown') {
-            modelText.textContent = data.model;
-        }
-
-        console.log('[SYNC] State refreshed from Desktop:', data);
-    } catch (e) { console.error('[SYNC] Failed to sync state', e); }
-}
-
-// --- SSL Banner ---
-const sslBanner = document.getElementById('sslBanner');
-
-async function checkSslStatus() {
-    // Only show banner if currently on HTTP
-    if (window.location.protocol === 'https:') return;
-
-    // Check if user dismissed the banner before
-    if (localStorage.getItem('sslBannerDismissed')) return;
-
-    sslBanner.style.display = 'flex';
-}
-
-async function enableHttps() {
-    const btn = document.getElementById('enableHttpsBtn');
-    btn.textContent = 'Generating...';
-    btn.disabled = true;
-
-    try {
-        const res = await fetchWithAuth('/generate-ssl', { method: 'POST' });
-        const data = await res.json();
-
-        if (data.success) {
-            sslBanner.innerHTML = `
-                <span>✅ ${data.message}</span>
-                <button id="sslReloadBtn">Reload After Restart</button>
-            `;
-            sslBanner.style.background = 'linear-gradient(90deg, #22c55e, #16a34a)';
+            // Shorten long model names for the small pill
+            let modelShort = data.model;
+            if (modelShort.length > 18) modelShort = modelShort.split(' ').slice(0, 2).join(' ');
+            modelText.textContent = modelShort;
             
-            // Add listener to the newly created button
-            const reloadBtn = document.getElementById('sslReloadBtn');
-            if (reloadBtn) reloadBtn.addEventListener('click', () => location.reload());
-        } else {
-            btn.textContent = 'Failed - Retry';
-            btn.disabled = false;
+            // Find model limit
+            const modelObj = MODELS.find(m => m.name.includes(modelShort) || m.name === data.model);
+            if (modelObj && modelObj.limit) {
+                document.getElementById('contextLimitText').textContent = modelObj.limit + ' tokens';
+            }
         }
-    } catch (e) {
-        btn.textContent = 'Error - Retry';
-        btn.disabled = false;
-    }
+        // Update usage bar
+        if (data.usagePercent !== undefined && usageBarFill) {
+            const pct = Math.min(Math.max(data.usagePercent, 0), 100);
+            usageBarFill.style.width = pct + '%';
+            usageBarFill.className = 'usage-bar-fill' + (pct > 90 ? ' crit' : pct > 70 ? ' warn' : '');
+            if (usageLabel) usageLabel.textContent = Math.round(pct) + '%';
+        }
+    } catch(e) {}
 }
 
-function dismissSslBanner() {
-    sslBanner.style.display = 'none';
-    localStorage.setItem('sslBannerDismissed', 'true');
-}
-
-// Check SSL on load
-checkSslStatus();
-// --- Models ---
-const MODELS = [
-    "Gemini 3.1 Pro (High)",
-    "Gemini 3.1 Pro (Low)",
-    "Gemini 3 Flash",
-    "Claude Sonnet 4.6 (Thinking)",
-    "Claude Opus 4.6 (Thinking)",
-    "GPT-OSS 120B (Medium)"
-];
-
-// --- WebSocket ---
+// ── WebSocket ──
 function connectWebSocket() {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     ws = new WebSocket(`${protocol}//${window.location.host}`);
 
-    ws.onopen = () => {
-        console.log('WS Connected');
-        updateStatus(true);
-        loadSnapshot();
-    };
+    ws.onopen = () => { updateStatus(true); loadSnapshot(); };
 
     ws.onmessage = (event) => {
         const data = JSON.parse(event.data);
         if (data.type === 'error' && data.message === 'Unauthorized') {
-            window.location.href = '/login.html';
-            return;
+            window.location.href = '/login.html'; return;
         }
         if (data.type === 'snapshot_update' && autoRefreshEnabled && !userIsScrolling) {
             loadSnapshot();
+        } else if (data.type === 'snapshot_update' && userIsScrolling) {
+            // User is scrolled up, increment badge
+            const badge = document.getElementById('unreadBadge');
+            if (badge) {
+                let count = parseInt(badge.textContent) || 0;
+                count++;
+                badge.textContent = count;
+                badge.classList.add('show');
+            }
         }
     };
 
-    ws.onclose = () => {
-        console.log('WS Disconnected');
-        updateStatus(false);
-        setTimeout(connectWebSocket, 2000);
-    };
+    ws.onclose = () => { updateStatus(false); setTimeout(connectWebSocket, 2000); };
 }
 
 function updateStatus(connected) {
     if (connected) {
-        statusDot.classList.remove('disconnected');
-        statusDot.classList.add('connected');
+        statusDot.className = 'status-dot connected';
         statusText.textContent = 'Live';
     } else {
-        statusDot.classList.remove('connected');
-        statusDot.classList.add('disconnected');
+        statusDot.className = 'status-dot disconnected';
         statusText.textContent = 'Reconnecting';
     }
 }
 
-// --- Rendering ---
+// ── Snapshot Rendering ──
 async function loadSnapshot() {
     try {
-        // Add spin animation to refresh button
         const icon = refreshBtn.querySelector('svg');
         icon.classList.remove('spin-anim');
-        void icon.offsetWidth; // trigger reflow
+        void icon.offsetWidth;
         icon.classList.add('spin-anim');
 
         const response = await fetchWithAuth('/snapshot');
         if (!response.ok) {
-            if (response.status === 503) {
-                // No snapshot available - likely no chat open
-                chatIsOpen = false;
-                showEmptyState();
-                return;
+            consecutiveFailures++;
+            if (response.status === 503 && consecutiveFailures > 5) {
+                // Only show empty state after 5 consecutive failures AND no prior content
+                if (!hasEverRenderedContent) {
+                    chatIsOpen = false;
+                    showEmptyState();
+                }
             }
-            throw new Error('Failed to load');
+            return;
         }
-
-        // Mark chat as open since we got a valid snapshot
+        consecutiveFailures = 0;
         chatIsOpen = true;
 
         const data = await response.json();
 
-        // Capture scroll state BEFORE updating content
-        const scrollPos = chatContainer.scrollTop;
-        const scrollHeight = chatContainer.scrollHeight;
-        const clientHeight = chatContainer.clientHeight;
-        const isNearBottom = scrollHeight - scrollPos - clientHeight < 120;
-        const isUserScrollLocked = Date.now() < userScrollLockUntil;
-
-        // --- UPDATE STATS ---
+        // Stats
         if (data.stats) {
-            const kbs = Math.round((data.stats.htmlSize + data.stats.cssSize) / 1024);
+            const kbs   = Math.round((data.stats.htmlSize + data.stats.cssSize) / 1024);
             const nodes = data.stats.nodes;
-            const statsText = document.getElementById('statsText');
-            if (statsText) statsText.textContent = `${nodes} Nodes · ${kbs}KB`;
+            const el    = document.getElementById('statsText');
+            if (el) el.textContent = `${nodes} Nodes · ${kbs}KB`;
         }
 
-        // --- CSS INJECTION (Cached) ---
+
+
+        // CSS Injection
         let styleTag = document.getElementById('cdp-styles');
         if (!styleTag) {
             styleTag = document.createElement('style');
@@ -233,761 +286,566 @@ async function loadSnapshot() {
             document.head.appendChild(styleTag);
         }
 
-        const darkModeOverrides = '/* --- BASE SNAPSHOT CSS --- */\n' +
-            data.css +
-            '\n\n/* --- FORCE DARK MODE OVERRIDES --- */\n' +
+        const darkModeOverrides =
+            '/* BASE SNAPSHOT CSS */\n' + data.css +
+            '\n\n/* DARK MODE OVERRIDES */\n' +
             ':root {\n' +
-            '    --bg-app: #0f172a;\n' +
-            '    --text-main: #f8fafc;\n' +
-            '    --text-muted: #94a3b8;\n' +
-            '    --border-color: #334155;\n' +
+            '  --bg-app: #0f172a; --background: 224 71.4% 4.1%; --foreground: 210 20% 98%; --card: 224 71.4% 4.1%;\n' +
+            '  --text-main: #f8fafc;\n' +
+            '  --text-muted: #94a3b8;\n' +
+            '  --border-color: #334155;\n' +
+            '  /* Antigravity CSS variable fallbacks */\n' +
+            '  --background: #0f172a;\n' +
+            '  --foreground: #e2e8f0;\n' +
+            '  --card: #1e293b;\n' +
+            '  --card-foreground: #e2e8f0;\n' +
+            '  --card-border: #334155;\n' +
+            '  --popover: #1e293b;\n' +
+            '  --popover-foreground: #e2e8f0;\n' +
+            '  --muted: #1e293b;\n' +
+            '  --muted-foreground: #94a3b8;\n' +
+            '  --accent: #334155;\n' +
+            '  --accent-foreground: #e2e8f0;\n' +
+            '  --border: #334155;\n' +
+            '  --input: #334155;\n' +
+            '  --content: #1e293b;\n' +
+            '  --sidebar: #1e293b;\n' +
+            '  --sidebar-foreground: #e2e8f0;\n' +
+            '  --primary: #6366f1;\n' +
+            '  --primary-foreground: #fff;\n' +
+            '  --secondary: #1e293b;\n' +
+            '  --secondary-foreground: #e2e8f0;\n' +
+            '  --destructive: #ef4444;\n' +
+            '  --ring: #6366f1;\n' +
+            '  --radius: 0.5rem;\n' +
             '}\n' +
-            '\n' +
-            '#conversation, #chat, #cascade {\n' +
-            '    background-color: transparent !important;\n' +
-            '    color: var(--text-main) !important;\n' +
-            '    font-family: \'Inter\', system-ui, sans-serif !important;\n' +
-            '    position: relative !important;\n' +
-            '    height: auto !important;\n' +
-            '    width: 100% !important;\n' +
-            '}\n' +
-            '\n' +
-            '/* Fix stacking BUT preserve absolute/fixed positioning for dropdowns */\n' +
-            '#conversation > div, #chat > div, #cascade > div {\n' +
-            '    position: static !important;\n' +
-            '}\n' +
-            '/* Preserve absolute positioning needed for dropdowns, tooltips, popups */\n' +
-            '[style*="position: absolute"], [style*="position: fixed"],\n' +
-            '[data-headlessui-state], [id*="headlessui"] {\n' +
-            '    position: absolute !important;\n' +
-            '}\n' +
-            '\n' +
-            '#conversation p, #chat p, #cascade p, #conversation h1, #chat h1, #cascade h1, #conversation h2, #chat h2, #cascade h2, #conversation h3, #chat h3, #cascade h3, #conversation h4, #chat h4, #cascade h4, #conversation h5, #chat h5, #cascade h5, #conversation span, #chat span, #cascade span, #conversation div, #chat div, #cascade div, #conversation li, #chat li, #cascade li {\n' +
-            '    color: inherit !important;\n' +
-            '}\n' +
-            '\n' +
-            '/* Force black inline text to white */\n' +
-            '[style*="color: rgb(0, 0, 0)"], [style*="color: black"],\n' +
-            '[style*="color:#000"], [style*="color: #000"] {\n' +
-            '    color: #e2e8f0 !important;\n' +
-            '}\n' +
-            '\n' +
-            '#conversation a, #chat a, #cascade a {\n' +
-            '    color: #60a5fa !important;\n' +
-            '    text-decoration: underline;\n' +
-            '}\n' +
-            '\n' +
-            '/* Hide broken local file icons (served from /c:/Users/... paths) */\n' +
-            'img[src^="/c:"], img[src^="/C:"], img[src*="AppData"] {\n' +
-            '    display: none !important;\n' +
-            '}\n' +
-            '\n' +
-            '/* Override Tailwind default block display for embedded file icons */\n' +
-            'img, svg {\n' +
-            '    display: inline !important;\n' +
-            '    vertical-align: middle !important;\n' +
-            '}\n' +
-            '/* Force file-reference wrappers (icon + filename) to stay inline */\n' +
-            'div:has(> img[src^="data:"]), div:has(> img[alt]), span:has(> img) {\n' +
-            '    display: inline !important;\n' +
-            '    vertical-align: middle !important;\n' +
-            '}\n' +
-            '/* Inline-flex containers from Antigravity (e.g. file mentions) */\n' +
-            '[class*="inline-flex"], [class*="inline-block"], [class*="items-center"]:has(img) {\n' +
-            '    display: inline-flex !important;\n' +
-            '    vertical-align: middle !important;\n' +
-            '}\n' +
-            '\n' +
-            '/* Fix Inline Code - Ultra-compact */\n' +
-            ':not(pre) > code {\n' +
-            '    padding: 0px 2px !important;\n' +
-            '    border-radius: 2px !important;\n' +
-            '    background-color: rgba(255, 255, 255, 0.1) !important;\n' +
-            '    font-size: 0.82em !important;\n' +
-            '    line-height: 1 !important;\n' +
-            '    white-space: normal !important;\n' +
-            '}\n' +
-            '\n' +
-            'pre, code, .monaco-editor-background, [class*="terminal"] {\n' +
-            '    background-color: #1e293b !important;\n' +
-            '    color: #e2e8f0 !important;\n' +
-            '    font-family: \'JetBrains Mono\', monospace !important;\n' +
-            '    border-radius: 3px;\n' +
-            '    border: 1px solid #334155;\n' +
-            '}\n' +
-            '                \n' +
-            '/* Multi-line Code Block - Minimal */\n' +
-            'pre {\n' +
-            '    position: relative !important;\n' +
-            '    white-space: pre-wrap !important; \n' +
-            '    word-break: break-word !important;\n' +
-            '    padding: 4px 6px !important;\n' +
-            '    margin: 2px 0 !important;\n' +
-            '    display: block !important;\n' +
-            '    width: 100% !important;\n' +
-            '}\n' +
-            '                \n' +
-            'pre.has-copy-btn {\n' +
-            '    padding-right: 28px !important;\n' +
-            '}\n' +
-            '                \n' +
-            '/* Single-line Code Block - Minimal */\n' +
-            'pre.single-line-pre {\n' +
-            '    display: inline-block !important;\n' +
-            '    width: auto !important;\n' +
-            '    max-width: 100% !important;\n' +
-            '    padding: 0px 4px !important;\n' +
-            '    margin: 0px !important;\n' +
-            '    vertical-align: middle !important;\n' +
-            '    background-color: #1e293b !important;\n' +
-            '    font-size: 0.85em !important;\n' +
-            '}\n' +
-            '                \n' +
-            'pre.single-line-pre > code {\n' +
-            '    display: inline !important;\n' +
-            '    white-space: nowrap !important;\n' +
-            '}\n' +
-            '                \n' +
-            'pre:not(.single-line-pre) > code {\n' +
-            '    display: block !important;\n' +
-            '    width: 100% !important;\n' +
-            '    overflow-x: auto !important;\n' +
-            '    background: transparent !important;\n' +
-            '    border: none !important;\n' +
-            '    padding: 0 !important;\n' +
-            '    margin: 0 !important;\n' +
-            '}\n' +
-            '                \n' +
-            '.mobile-copy-btn {\n' +
-            '    position: absolute !important;\n' +
-            '    top: 2px !important;\n' +
-            '    right: 2px !important;\n' +
-            '    background: rgba(30, 41, 59, 0.5) !important;\n' +
-            '    color: #94a3b8 !important;\n' +
-            '    border: none !important;\n' +
-            '    width: 24px !important; \n' +
-            '    height: 24px !important;\n' +
-            '    padding: 0 !important;\n' +
-            '    cursor: pointer !important;\n' +
-            '    display: flex !important;\n' +
-            '    align-items: center !important;\n' +
-            '    justify-content: center !important;\n' +
-            '    border-radius: 4px !important;\n' +
-            '    transition: all 0.2s ease !important;\n' +
-            '    -webkit-tap-highlight-color: transparent !important;\n' +
-            '    z-index: 10 !important;\n' +
-            '    margin: 0 !important;\n' +
-            '}\n' +
-            '                \n' +
-            '.mobile-copy-btn:hover,\n' +
-            '.mobile-copy-btn:focus {\n' +
-            '    background: rgba(59, 130, 246, 0.2) !important;\n' +
-            '    color: #60a5fa !important;\n' +
-            '}\n' +
-            '                \n' +
-            '.mobile-copy-btn svg {\n' +
-            '    width: 16px !important;\n' +
-            '    height: 16px !important;\n' +
-            '    stroke: currentColor !important;\n' +
-            '    stroke-width: 2 !important;\n' +
-            '    fill: none !important;\n' +
-            '}\n' +
-            '                \n' +
-            'blockquote {\n' +
-            '    border-left: 3px solid #3b82f6 !important;\n' +
-            '    background: rgba(59, 130, 246, 0.1) !important;\n' +
-            '    color: #cbd5e1 !important;\n' +
-            '    padding: 8px 12px !important;\n' +
-            '    margin: 8px 0 !important;\n' +
-            '}\n' +
-            '\n' +
-            'table {\n' +
-            '    border-collapse: collapse !important;\n' +
-            '    width: 100% !important;\n' +
-            '    border: 1px solid #334155 !important;\n' +
-            '}\n' +
-            'th, td {\n' +
-            '    border: 1px solid #334155 !important;\n' +
-            '    padding: 8px !important;\n' +
-            '    color: #e2e8f0 !important;\n' +
-            '}\n' +
-            '\n' +
-            '::-webkit-scrollbar {\n' +
-            '    width: 0 !important;\n' +
-            '}\n' +
-            '                \n' +
-            '[style*="background-color: rgb(255, 255, 255)"],\n' +
-            '[style*="background-color: white"],\n' +
-            '[style*="background: white"] {\n' +
-            '    background-color: transparent !important;\n' +
-            '}';
-        styleTag.textContent = darkModeOverrides;
-        chatContent.innerHTML = data.html;
 
+            // Force dark body for the injected page
+            'body, html { background-color: #0f172a !important; color: #e2e8f0 !important; }\n' +
 
-        // Add mobile copy buttons to all code blocks
+            // Force ALL white/light backgrounds to dark
+            '[class*="bg-background"], [class*="bg-white"], [class*="bg-card"] { background-color: #0f172a !important; }\n' +
+            '[style*="background-color: white"], [style*="background: white"], [style*="background-color: rgb(255, 255, 255)"] { background-color: #1e293b !important; }\n' +
+            '[style*="background-color: rgb(248"], [style*="background-color: rgb(249"], [style*="background-color: rgb(250"], [style*="background-color: rgb(251"] { background-color: #1e293b !important; }\n' +
+
+            // Core conversation container — keep its own layout but ensure it scrolls properly
+            '#conversation, #chat, #cascade, [data-testid="conversation-view"] {\n' +
+            '  background-color: transparent !important;\n' +
+            '  color: var(--foreground, #e2e8f0) !important;\n' +
+            '  font-family: "Inter", system-ui, sans-serif !important;\n' +
+            '  width: 100% !important;\n' +
+            '  overflow: visible !important;\n' +
+            '  display: flex !important;\n' + // Force display flex to override `hidden md:flex`
+            '}\n' +
+
+            // Don't fight Tailwind's flex layout — just let overflow be visible so content renders
+            '.chat-content > * {\n' +
+            '  overflow: visible !important;\n' +
+            '}\n' +
+
+            // Text color inheritance
+            '#conversation p, #chat p, #cascade p,' +
+            '#conversation h1,#chat h1,#cascade h1,' +
+            '#conversation h2,#chat h2,#cascade h2,' +
+            '#conversation h3,#chat h3,#cascade h3,' +
+            '#conversation span,#chat span,#cascade span,' +
+            '#conversation div,#chat div,#cascade div,' +
+            '#conversation li,#chat li,#cascade li { color: inherit !important; }\n' +
+
+            // Force dark inline styles
+            '[style*="color: rgb(0, 0, 0)"], [style*="color: black"],' +
+            '[style*="color:#000"], [style*="color: #000"] { color: #e2e8f0 !important; }\n' +
+
+            // Links
+            '#conversation a, #chat a, #cascade a { color: #60a5fa !important; text-decoration: underline; }\n' +
+
+            // Hide broken local file images
+            'img[src^="/c:"], img[src^="/C:"], img[src*="AppData"] { display: none !important; }\n' +
+
+            // Inline elements
+            'img, svg { display: inline !important; vertical-align: middle !important; }\n' +
+            'div:has(> img[src^="data:"]), div:has(> img[alt]), span:has(> img) { display: inline !important; vertical-align: middle !important; }\n' +
+            '[class*="inline-flex"], [class*="inline-block"], [class*="items-center"]:has(img) { display: inline-flex !important; vertical-align: middle !important; }\n' +
+
+            // Inline code
+            ':not(pre) > code { padding: 1px 3px !important; border-radius: 3px !important; background-color: rgba(255,255,255,0.1) !important; font-size: 0.83em !important; white-space: normal !important; }\n' +
+
+            // Code blocks
+            'pre, code, .monaco-editor-background, [class*="terminal"] { background-color: #1e293b !important; color: #e2e8f0 !important; font-family: "JetBrains Mono", monospace !important; border-radius: 4px; border: 1px solid #334155; }\n' +
+            'pre { position: relative !important; white-space: pre-wrap !important; word-break: break-word !important; padding: 8px 10px !important; margin: 4px 0 !important; display: block !important; width: 100% !important; }\n' +
+            'pre.has-copy-btn { padding-right: 36px !important; }\n' +
+            'pre.single-line-pre { display: inline-block !important; width: auto !important; max-width: 100% !important; padding: 1px 5px !important; margin: 0 !important; vertical-align: middle !important; font-size: 0.85em !important; }\n' +
+            'pre.single-line-pre > code { display: inline !important; white-space: nowrap !important; }\n' +
+            'pre:not(.single-line-pre) > code { display: block !important; width: 100% !important; overflow-x: auto !important; background: transparent !important; border: none !important; padding: 0 !important; margin: 0 !important; }\n' +
+
+            // Blockquote
+            'blockquote { border-left: 3px solid #3b82f6 !important; background: rgba(59,130,246,0.08) !important; color: #cbd5e1 !important; padding: 8px 12px !important; margin: 6px 0 !important; }\n' +
+
+            // Tables
+            'table { border-collapse: collapse !important; width: 100% !important; border: 1px solid #334155 !important; }\n' +
+            'th, td { border: 1px solid #334155 !important; padding: 8px !important; color: #e2e8f0 !important; }\n' +
+
+            // White backgrounds → transparent
+            '[style*="background-color: rgb(255, 255, 255)"], [style*="background-color: white"], [style*="background: white"] { background-color: transparent !important; }\n' +
+
+            // Hide injected scrollbars
+            '::-webkit-scrollbar { width: 3px !important; }\n' +
+
+            // HIDE Antigravity input/toolbar from snapshot — scoped to #chatContent only
+            '#chatContent [contenteditable="true"], #chatContent [role="toolbar"], #chatContent [data-testid="chat-input"] { display: none !important; }\n' +
+            '#chatContent nav, #chatContent [class*="sidebar"], #chatContent footer { display: none !important; }\n' +
+            '#chatContent .absolute.bottom-0:has([contenteditable="true"]), #chatContent .absolute.bottom-0:has([role="textbox"]), #chatContent .absolute.bottom-0:has(form) { display: none !important; }\n' +
+            '#chatContent .fixed.bottom-0:has([contenteditable="true"]), #chatContent .fixed.bottom-0:has([role="textbox"]), #chatContent .fixed.bottom-0:has(form) { display: none !important; }\n' +
+            '#chatContent .sticky.bottom-0:has([contenteditable="true"]), #chatContent .sticky.bottom-0:has([role="textbox"]), #chatContent .sticky.bottom-0:has(form) { display: none !important; }\n' +
+
+            // Copy button
+            '.mobile-copy-btn { position: absolute !important; top: 4px !important; right: 4px !important; background: rgba(30,41,59,0.7) !important; color: #94a3b8 !important; border: 1px solid rgba(255,255,255,0.1) !important; width: 26px !important; height: 26px !important; padding: 0 !important; cursor: pointer !important; display: flex !important; align-items: center !important; justify-content: center !important; border-radius: 5px !important; z-index: 10 !important; }\n' +
+            '.mobile-copy-btn:hover { background: rgba(59,130,246,0.2) !important; color: #60a5fa !important; }\n' +
+            '.mobile-copy-btn svg { width: 14px !important; height: 14px !important; stroke: currentColor !important; stroke-width: 2 !important; fill: none !important; }\n';
+
+        // Extract styles from snapshot (css vars, tailwind, etc)
+        let extractedStyles = '';
+        const styleMatch = data.html.match(/<style[^>]*>([\s\S]*?)<\/style>/i);
+        if (styleMatch && styleMatch[1]) {
+            extractedStyles = styleMatch[1];
+        }
+
+        styleTag.textContent = extractedStyles + '\n' + darkModeOverrides;
+
+        // Strip <style> and <script> tags from the snapshot HTML so they
+        // don't appear as visible text or inject conflicting styles
+        let cleanHtml = data.html
+            .replace(/<style[\s\S]*?<\/style>/gi, '')
+            .replace(/<script[\s\S]*?<\/script>/gi, '');
+
+        // GUARD: If we get a very short/empty response but had good content before,
+        // don't overwrite — this prevents the "flash blank" on reconnect
+        const MIN_CONTENT_LENGTH = 500;
+        if (cleanHtml.trim().length < MIN_CONTENT_LENGTH && hasEverRenderedContent) {
+            console.warn('[SNAPSHOT] Short response, keeping existing content');
+            return;
+        }
+
+        // Capture scroll state IMMEDIATELY before modifying DOM
+        const scrollPos    = chatContainer.scrollTop;
+        const scrollHeight = chatContainer.scrollHeight;
+        const clientHeight = chatContainer.clientHeight;
+        const isNearBottom = scrollHeight - scrollPos - clientHeight < 120;
+
+        // Only update DOM if content actually changed (prevents flicker/refresh artifacts)
+        if (chatContent.dataset.lastHTML === cleanHtml) {
+            // Content unchanged – just maintain scroll
+            if (isNearBottom) scrollToBottom();
+            return;
+        }
+        chatContent.dataset.lastHTML = cleanHtml;
+        chatContent.innerHTML = cleanHtml;
+        hasEverRenderedContent = true;
+        lastGoodHTML = cleanHtml;
+
+        // Add copy buttons
         addMobileCopyButtons();
 
-        // Smart scroll behavior: respect user scroll, only auto-scroll when appropriate
-        if (isUserScrollLocked) {
-            // User recently scrolled - try to maintain their approximate position
-            // Use percentage-based restoration for better accuracy
-            const scrollPercent = scrollHeight > 0 ? scrollPos / scrollHeight : 0;
-            const newScrollPos = chatContainer.scrollHeight * scrollPercent;
-            chatContainer.scrollTop = newScrollPos;
-        } else if (isNearBottom || scrollPos === 0) {
-            // User was at bottom or hasn't scrolled - auto scroll to bottom
+        // Scroll restoration
+        if (isNearBottom) {
             scrollToBottom();
+        } else if (isFetchingOlder) {
+            const newScrollHeight = chatContainer.scrollHeight;
+            if (newScrollHeight > scrollHeight) {
+                // Keep view stable relative to the current message when history is prepended
+                chatContainer.scrollTop = scrollPos + (newScrollHeight - scrollHeight);
+            }
         } else {
-            // Preserve exact scroll position
+            // Restore scroll position immediately to prevent layout height collapse from forcing scrollTop to 0
             chatContainer.scrollTop = scrollPos;
         }
 
     } catch (err) {
-        console.error(err);
+        consecutiveFailures++;
+        console.error('[SNAPSHOT]', err);
+        // On error, NEVER wipe existing content
     }
 }
 
-// --- Mobile Code Block Copy Functionality ---
+// ── Copy Buttons for Code Blocks ──
 function addMobileCopyButtons() {
-    // Find all pre elements (code blocks) in the chat
     const codeBlocks = chatContent.querySelectorAll('pre');
-
     codeBlocks.forEach((pre, index) => {
-        // Skip if already has our button
         if (pre.querySelector('.mobile-copy-btn')) return;
-
-        // Get the code text
-        const codeElement = pre.querySelector('code') || pre;
-        const textToCopy = (codeElement.textContent || codeElement.innerText).trim();
-
-        // Check if there's a newline character in the TRIMMED text
-        // This ensures single-line blocks with trailing newlines don't get buttons
+        const codeEl  = pre.querySelector('code') || pre;
+        const textToCopy = (codeEl.textContent || codeEl.innerText).trim();
         const hasNewline = /\n/.test(textToCopy);
-
-        // If it's a single line code block, don't add the copy button
         if (!hasNewline) {
             pre.classList.remove('has-copy-btn');
             pre.classList.add('single-line-pre');
             return;
         }
-
-        // Add class for padding
         pre.classList.remove('single-line-pre');
         pre.classList.add('has-copy-btn');
 
-        // Create the copy button (icon only)
-        const copyBtn = document.createElement('button');
-        copyBtn.className = 'mobile-copy-btn';
-        copyBtn.setAttribute('data-code-index', index);
-        copyBtn.setAttribute('aria-label', 'Copy code');
-        copyBtn.innerHTML = `
-            <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round">
-                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-            </svg>
-            `;
+        const btn = document.createElement('button');
+        btn.className = 'mobile-copy-btn';
+        btn.setAttribute('aria-label', 'Copy code');
+        btn.innerHTML = `<svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>`;
 
-        // Add click handler for copy
-        copyBtn.addEventListener('click', async (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-
+        btn.addEventListener('click', async (e) => {
+            e.preventDefault(); e.stopPropagation();
             const success = await copyToClipboard(textToCopy);
-
-            if (success) {
-                // Visual feedback - show checkmark
-                copyBtn.classList.add('copied');
-                copyBtn.innerHTML = `
-            <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round">
-                <polyline points="20 6 9 17 4 12"></polyline>
-            </svg>
-            `;
-
-                // Reset after 2 seconds
-                setTimeout(() => {
-                    copyBtn.classList.remove('copied');
-                    copyBtn.innerHTML = `
-            <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round">
-                            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-                            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-                        </svg>
-            `;
-                }, 2000);
-            } else {
-                // Show X icon briefly on error
-                copyBtn.innerHTML = `
-            <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round">
-                        <line x1="18" y1="6" x2="6" y2="18"></line>
-                        <line x1="6" y1="6" x2="18" y2="18"></line>
-                    </svg>
-            `;
-                setTimeout(() => {
-                    copyBtn.innerHTML = `
-            <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round">
-                            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-                            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-                        </svg>
-            `;
-                }, 2000);
-            }
+            btn.innerHTML = success
+                ? `<svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>`
+                : `<svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>`;
+            setTimeout(() => {
+                btn.innerHTML = `<svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>`;
+            }, 2000);
         });
-
-        // Insert button into pre element
-        pre.appendChild(copyBtn);
+        pre.appendChild(btn);
     });
 }
 
-// --- Cross-platform Clipboard Copy ---
+// ── Clipboard ──
 async function copyToClipboard(text) {
-    // Method 1: Modern Clipboard API (works on HTTPS or localhost)
     if (navigator.clipboard && window.isSecureContext) {
-        try {
-            await navigator.clipboard.writeText(text);
-            console.log('[COPY] Success via Clipboard API');
-            return true;
-        } catch (err) {
-            console.warn('[COPY] Clipboard API failed:', err);
-        }
+        try { await navigator.clipboard.writeText(text); return true; } catch(e) {}
     }
-
-    // Method 2: Fallback using execCommand (works on HTTP, older browsers)
     try {
-        const textArea = document.createElement('textarea');
-        textArea.value = text;
-
-        // Avoid scrolling to bottom on iOS
-        textArea.style.position = 'fixed';
-        textArea.style.top = '0';
-        textArea.style.left = '0';
-        textArea.style.width = '2em';
-        textArea.style.height = '2em';
-        textArea.style.padding = '0';
-        textArea.style.border = 'none';
-        textArea.style.outline = 'none';
-        textArea.style.boxShadow = 'none';
-        textArea.style.background = 'transparent';
-        textArea.style.opacity = '0';
-
-        document.body.appendChild(textArea);
-
-        // iOS specific handling
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.cssText = 'position:fixed;top:0;left:0;width:2em;height:2em;opacity:0;';
+        document.body.appendChild(ta);
         if (navigator.userAgent.match(/ipad|iphone/i)) {
             const range = document.createRange();
-            range.selectNodeContents(textArea);
-            const selection = window.getSelection();
-            selection.removeAllRanges();
-            selection.addRange(range);
-            textArea.setSelectionRange(0, text.length);
-        } else {
-            textArea.select();
-        }
-
-        const success = document.execCommand('copy');
-        document.body.removeChild(textArea);
-
-        if (success) {
-            console.log('[COPY] Success via execCommand fallback');
-            return true;
-        }
-    } catch (err) {
-        console.warn('[COPY] execCommand fallback failed:', err);
-    }
-
-    // Method 3: For Android WebView or restricted contexts
-    // Show the text in a selectable modal if all else fails
-    console.error('[COPY] All copy methods failed');
+            range.selectNodeContents(ta);
+            const sel = window.getSelection();
+            sel.removeAllRanges(); sel.addRange(range);
+            ta.setSelectionRange(0, text.length);
+        } else { ta.select(); }
+        const ok = document.execCommand('copy');
+        document.body.removeChild(ta);
+        return ok;
+    } catch(e) {}
     return false;
 }
 
 function scrollToBottom() {
-    chatContainer.scrollTo({
-        top: chatContainer.scrollHeight,
-        behavior: 'smooth'
-    });
+    chatContainer.scrollTo({ top: chatContainer.scrollHeight, behavior: 'smooth' });
 }
 
-// --- Inputs ---
 async function sendMessage() {
+    if (sendBtn.classList.contains('generating')) {
+        try {
+            sendBtn.disabled = true;
+            const res = await fetchWithAuth('/stop', { method: 'POST' });
+            const data = await res.json();
+            if (data.success) {
+                showToast('Generation stopped', 'success');
+            }
+            setTimeout(loadSnapshot, 500);
+        } catch (e) {
+            console.error('[STOP]', e);
+        } finally {
+            sendBtn.disabled = false;
+        }
+        return;
+    }
+
     const message = messageInput.value.trim();
-    if (!message) return;
+    if (!message && pendingAttachments.length === 0) return;
 
-    // Optimistic UI updates
-    const previousValue = messageInput.value;
-    messageInput.value = ''; // Clear immediately
-    messageInput.style.height = 'auto'; // Reset height
-    messageInput.blur(); // Close keyboard on mobile immediately
-
+    const attachmentsToSend = [...pendingAttachments];
+    
+    messageInput.value = '';
+    messageInput.style.height = 'auto';
+    messageInput.blur();
     sendBtn.disabled = true;
-    sendBtn.style.opacity = '0.5';
+
+    // Clear UI optimistically
+    pendingAttachments = [];
+    renderAttachments();
 
     try {
-        // If no chat is open, start a new one first
         if (!chatIsOpen) {
-            const newChatRes = await fetchWithAuth('/new-chat', { method: 'POST' });
-            const newChatData = await newChatRes.json();
-            if (newChatData.success) {
-                // Wait for the new chat to be ready
-                await new Promise(r => setTimeout(r, 800));
-                chatIsOpen = true;
-            }
+            const r = await fetchWithAuth('/new-chat', { method: 'POST' });
+            const d = await r.json();
+            if (d.success) { await new Promise(r => setTimeout(r, 800)); chatIsOpen = true; }
         }
 
-        const res = await fetchWithAuth('/send', {
+        const res  = await fetchWithAuth('/send', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ message })
+            body: JSON.stringify({ message, attachments: attachmentsToSend })
         });
+        const data = await res.json();
 
-        // Always reload snapshot to check if message appeared
+        if (data.success) {
+            showToast('Message sent ✓', 'success');
+        } else {
+            showToast('Sent (may be delayed)', '');
+        }
+
         setTimeout(loadSnapshot, 300);
         setTimeout(loadSnapshot, 800);
         setTimeout(checkChatStatus, 1000);
 
-        // Don't revert the input - if user sees the message in chat, it was sent
-        // Only log errors for debugging, don't show alert popups
-        if (!res.ok) {
-            console.warn('Send response not ok, but message may have been sent:', await res.json().catch(() => ({})));
-        }
-    } catch (e) {
-        // Network error - still try to refresh in case it went through
-        console.error('Send error:', e);
+    } catch(e) {
+        console.error('[SEND]', e);
+        showToast('Network error — retrying...', 'error');
+        // Restore attachments on failure
+        pendingAttachments = attachmentsToSend;
+        renderAttachments();
+        messageInput.value = message;
         setTimeout(loadSnapshot, 500);
     } finally {
         sendBtn.disabled = false;
-        sendBtn.style.opacity = '1';
     }
 }
 
-// --- Event Listeners ---
+// ── Event Listeners: Input & Send ──
 sendBtn.addEventListener('click', sendMessage);
 
-refreshBtn.addEventListener('click', () => {
-    // Refresh both Chat and State (Mode/Model)
-    loadSnapshot();
-    fetchAppState(); // PRIORITY: Sync from Desktop
-});
-
 messageInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        sendMessage();
+    // If it's just Enter without shift, we now want it to just add a newline naturally (multiline support)
+    // To send, the user clicks the send button.
+    // However, if we want to allow sending on Desktop with Enter, and Shift+Enter for newline:
+    if (!isMobile && e.key === 'Enter' && !e.shiftKey) { 
+        e.preventDefault(); 
+        sendMessage(); 
     }
+    // On mobile, native Enter adds a newline automatically since it's a textarea.
 });
 
-messageInput.addEventListener('input', function () {
+messageInput.addEventListener('input', function() {
     this.style.height = 'auto';
-    this.style.height = (this.scrollHeight) + 'px';
+    this.style.height = Math.min(this.scrollHeight, 150) + 'px';
 });
 
-// --- Support Modal Logic ---
-if (supportBtn) {
-    supportBtn.addEventListener('click', () => {
-        if (supportOverlay) {
-            supportOverlay.classList.add('show');
-        }
-    });
-}
+// ── Refresh ──
+refreshBtn.addEventListener('click', () => { loadSnapshot(); fetchAppState(); });
 
-if (closeSupportBtn) {
-    closeSupportBtn.addEventListener('click', () => {
-        if (supportOverlay) {
-            supportOverlay.classList.remove('show');
-        }
-    });
-}
+// ── Stop ──
+stopBtn.addEventListener('click', async () => {
+    stopBtn.style.opacity = '0.5';
+    try { await fetchWithAuth('/stop', { method: 'POST' }); } catch(e) {}
+    setTimeout(() => stopBtn.style.opacity = '1', 500);
+});
 
-if (supportOverlay) {
-    supportOverlay.addEventListener('click', (e) => {
-        if (e.target === supportOverlay) {
-            supportOverlay.classList.remove('show');
-        }
-    });
-}
-
-// --- Scroll Sync to Desktop ---
-let scrollSyncTimeout = null;
-let lastScrollSync = 0;
-const SCROLL_SYNC_DEBOUNCE = 150; // ms between scroll syncs
-let snapshotReloadPending = false;
+// ── Scroll Sync ──
+let scrollSyncTimeout   = null;
+let lastScrollSync      = 0;
+let snapshotPending     = false;
+const SCROLL_DEBOUNCE   = 150;
 
 async function syncScrollToDesktop() {
-    const scrollPercent = chatContainer.scrollTop / (chatContainer.scrollHeight - chatContainer.clientHeight);
+    const pct = chatContainer.scrollTop / Math.max(1, chatContainer.scrollHeight - chatContainer.clientHeight);
     try {
         await fetchWithAuth('/remote-scroll', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ scrollPercent })
+            body: JSON.stringify({ scrollPercent: pct })
         });
-
-        // After scrolling desktop, reload snapshot to get newly visible content
-        // (Antigravity uses virtualized scrolling - only visible messages are in DOM)
-        if (!snapshotReloadPending) {
-            snapshotReloadPending = true;
-            setTimeout(() => {
-                loadSnapshot();
-                snapshotReloadPending = false;
-            }, 300);
+        if (!snapshotPending) {
+            snapshotPending = true;
+            setTimeout(() => { loadSnapshot(); snapshotPending = false; }, 300);
         }
-    } catch (e) {
-        console.log('Scroll sync failed:', e.message);
-    }
+    } catch(e) {}
 }
 
 chatContainer.addEventListener('scroll', () => {
+    if (isFetchingOlder) return;
     userIsScrolling = true;
-    // Set a lock to prevent auto-scroll jumping for a few seconds
     userScrollLockUntil = Date.now() + USER_SCROLL_LOCK_DURATION;
     clearTimeout(idleTimer);
 
-    const isNearBottom = chatContainer.scrollHeight - chatContainer.scrollTop - chatContainer.clientHeight < 120;
-    if (isNearBottom) {
-        scrollToBottomBtn.classList.remove('show');
-        // If user scrolled to bottom, clear the lock so auto-scroll works
-        userScrollLockUntil = 0;
-    } else {
-        scrollToBottomBtn.classList.add('show');
-    }
+    const near = chatContainer.scrollHeight - chatContainer.scrollTop - chatContainer.clientHeight < 120;
+    if (near) { scrollToBottomBtn.classList.remove('show'); userScrollLockUntil = 0; }
+    else       { scrollToBottomBtn.classList.add('show'); }
 
-    // Debounced scroll sync to desktop
     const now = Date.now();
-    if (now - lastScrollSync > SCROLL_SYNC_DEBOUNCE) {
+    if (now - lastScrollSync > SCROLL_DEBOUNCE) {
         lastScrollSync = now;
         clearTimeout(scrollSyncTimeout);
         scrollSyncTimeout = setTimeout(syncScrollToDesktop, 100);
     }
 
-    idleTimer = setTimeout(() => {
-        userIsScrolling = false;
-        autoRefreshEnabled = true;
-    }, 5000);
+    idleTimer = setTimeout(() => { userIsScrolling = false; autoRefreshEnabled = true; }, 5000);
 });
 
 scrollToBottomBtn.addEventListener('click', () => {
-    userIsScrolling = false;
-    userScrollLockUntil = 0; // Clear lock so auto-scroll works again
+    userIsScrolling = false; userScrollLockUntil = 0;
     scrollToBottom();
+    const badge = document.getElementById('unreadBadge');
+    if (badge) {
+        badge.textContent = '0';
+        badge.classList.remove('show');
+    }
 });
 
-// --- Quick Actions ---
+// ── Quick Actions ──
 function quickAction(text) {
     messageInput.value = text;
     messageInput.style.height = 'auto';
-    messageInput.style.height = messageInput.scrollHeight + 'px';
+    messageInput.style.height = Math.min(messageInput.scrollHeight, 120) + 'px';
     messageInput.focus();
 }
 
-// --- Stop Logic ---
-stopBtn.addEventListener('click', async () => {
-    stopBtn.style.opacity = '0.5';
-    try {
-        const res = await fetchWithAuth('/stop', { method: 'POST' });
-        const data = await res.json();
-        if (data.success) {
-            // alert('Stopped');
-        } else {
-            // alert('Error: ' + data.error);
-        }
-    } catch (e) { }
-    setTimeout(() => stopBtn.style.opacity = '1', 500);
+quickActionChips.forEach(chip => {
+    chip.addEventListener('click', () => {
+        const action = chip.getAttribute('data-action') || chip.innerText.trim();
+        if      (action.includes('Explain')) quickAction('Explain this code in detail.');
+        else if (action.includes('Fix'))     quickAction('Please fix the bugs in this code.');
+        else if (action.includes('Docs'))    quickAction('Please create documentation for this code.');
+        else                                  quickAction(action);
+    });
 });
 
-// --- New Chat Logic ---
+// ── New Chat ──
 async function startNewChat() {
     newChatBtn.style.opacity = '0.5';
     newChatBtn.style.pointerEvents = 'none';
-
     try {
-        const res = await fetchWithAuth('/new-chat', { method: 'POST' });
+        const res  = await fetchWithAuth('/new-chat', { method: 'POST' });
         const data = await res.json();
-
         if (data.success) {
-            // Reload snapshot to show new empty chat
+            showToast('New chat started', 'success');
             setTimeout(loadSnapshot, 500);
             setTimeout(loadSnapshot, 1000);
             setTimeout(checkChatStatus, 1500);
-        } else {
-            console.error('Failed to start new chat:', data.error);
         }
-    } catch (e) {
-        console.error('New chat error:', e);
-    }
-
-    setTimeout(() => {
-        newChatBtn.style.opacity = '1';
-        newChatBtn.style.pointerEvents = 'auto';
-    }, 500);
+    } catch(e) { console.error('[NEW CHAT]', e); }
+    setTimeout(() => { newChatBtn.style.opacity = '1'; newChatBtn.style.pointerEvents = 'auto'; }, 500);
 }
-
 newChatBtn.addEventListener('click', startNewChat);
 
-// --- Chat History Logic ---
-async function showChatHistory() {
-    const historyLayer = document.getElementById('historyLayer');
-    const historyList = document.getElementById('historyList');
+// ── Left Sidebar (Chat History) ──
+function renderChatHistory(chats, filterText = '') {
+    const lowerFilter  = filterText.toLowerCase();
+    const filtered     = filterText ? chats.filter(c =>
+        c.title.toLowerCase().includes(lowerFilter) ||
+        (c.project && c.project.toLowerCase().includes(lowerFilter))
+    ) : chats;
 
-    // Show loading state
-    historyList.innerHTML = `
-        <div class="history-state-container">
-            <div class="history-spinner"></div>
-            <div class="history-state-text">Loading History...</div>
-        </div>
-    `;
-    historyLayer.classList.add('show');
-    historyBtn.style.opacity = '1';
-
-    try {
-        const res = await fetchWithAuth('/chat-history');
-        const data = await res.json();
-
-        if (data.error) {
-            historyList.innerHTML = `
-                <div class="history-state-container">
-                    <div class="history-state-icon">⚠️</div>
-                    <div class="history-state-title">Error loading history</div>
-                    <div class="history-state-desc">${data.error}</div>
-                    <button class="history-new-btn mt-4">
-                        <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
-                            <line x1="12" y1="5" x2="12" y2="19"></line>
-                            <line x1="5" y1="12" x2="19" y2="12"></line>
-                        </svg>
-                        Start New Conversation
-                    </button>
-                </div>
-            `;
-            return;
-        }
-
-        const chats = data.chats || [];
-        if (chats.length === 0) {
-            historyList.innerHTML = `
-                <div class="history-state-container">
-                    <div class="history-state-icon">📝</div>
-                    <div class="history-state-title">No recent chats found</div>
-                    <div class="history-state-desc">Start a new conversation to see them here.</div>
-                    <button class="history-new-btn mt-4">
-                        <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
-                            <line x1="12" y1="5" x2="12" y2="19"></line>
-                            <line x1="5" y1="12" x2="19" y2="12"></line>
-                        </svg>
-                        Start New Conversation
-                    </button>
-                </div>
-            `;
-            return;
-        }
-
-        // Render chats
-        let html = `
-            <div class="history-action-container">
-                <button class="history-new-btn">
-                    <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
-                        <line x1="12" y1="5" x2="12" y2="19"></line>
-                        <line x1="5" y1="12" x2="19" y2="12"></line>
-                    </svg>
-                    New Conversation
-                </button>
-            </div>
-            <div class="history-list-group">
-        `;
-
-        chats.forEach(chat => {
-            const safeTitle = chat.title.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-            html += `
-                <div class="history-card" data-title="${safeTitle}">
-                    <div class="history-card-icon">
-                        <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
-                        </svg>
-                    </div>
-                    <div class="history-card-content">
-                        <span class="history-card-title">${escapeHtml(chat.title)}</span>
-                    </div>
-                    <div class="history-card-arrow">
-                        <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
-                            <polyline points="9 18 15 12 9 6"></polyline>
-                        </svg>
-                    </div>
-                </div>
-            `;
-        });
-
-        html += `</div>`;
-
-        historyList.innerHTML = html;
-
-    } catch (e) {
-        historyList.innerHTML = `
-            <div class="history-state-container">
-                <div class="history-state-icon">🔌</div>
-                <div class="history-state-title">Connection Error</div>
-                <div class="history-state-desc">Failed to reach the server.</div>
-            </div>
-        `;
+    if (!filtered.length) {
+        historyList.innerHTML = '<div style="padding:40px 20px;text-align:center;color:var(--text-muted);font-size:13px;">' +
+            (filterText ? 'No matching conversations' : 'No past conversations found') + '</div>';
+        return;
     }
+
+    const grouped = {};
+    for (const chat of filtered) {
+        const proj = chat.project || 'Other';
+        if (!grouped[proj]) grouped[proj] = [];
+        grouped[proj].push(chat);
+    }
+
+    let html = '';
+    for (const [project, projectChats] of Object.entries(grouped)) {
+        html += `<div class="project-group"><div class="project-header">${project}</div>`;
+        for (const chat of projectChats) {
+            const title = chat.title.replace(/"/g, '&quot;').replace(/</g, '&lt;');
+            html += `<div class="history-card" data-title="${title}">
+                <div class="history-card-icon">
+                    <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" fill="none" stroke-width="1.8">
+                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                    </svg>
+                </div>
+                <div class="history-card-content"><span class="history-card-title">${chat.title}</span></div>
+                <div class="history-card-arrow">
+                    <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" fill="none" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                </div>
+            </div>`;
+        }
+        html += '</div>';
+    }
+    historyList.innerHTML = html;
 }
 
+let cachedChats = [];
+async function showChatHistory() {
+    historyList.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-muted);font-size:13px;">Loading...</div>';
+    sidebarMenu.classList.add('show');
+    sidebarOverlay.classList.add('show');
+
+    const searchInput = document.getElementById('historySearchInput');
+    if (searchInput) { searchInput.value = ''; searchInput.oninput = null; }
+
+    try {
+        const res  = await fetchWithAuth('/chat-history');
+        const data = await res.json();
+        if (data.success || data.chats) {
+            cachedChats = data.chats || [];
+            renderChatHistory(cachedChats);
+            if (searchInput) {
+                searchInput.oninput = (e) => renderChatHistory(cachedChats, e.target.value);
+            }
+        } else {
+            historyList.innerHTML = '<div style="padding:20px;text-align:center;color:var(--error);font-size:13px;">Error loading history</div>';
+        }
+    } catch(e) {
+        historyList.innerHTML = '<div style="padding:20px;text-align:center;color:var(--error);font-size:13px;">Network error</div>';
+    }
+}
 
 function hideChatHistory() {
-    historyLayer.classList.remove('show');
-    // Send an escape key to Antigravity to close the History panel
-    try {
-        fetchWithAuth('/close-history', { method: 'POST' });
-    } catch (e) {
-        console.error('Failed to close history on desktop:', e);
-    }
+    sidebarMenu.classList.remove('show');
+    sidebarOverlay.classList.remove('show');
+    try { fetchWithAuth('/close-history', { method: 'POST' }); } catch(e) {}
 }
 
-historyBtn.addEventListener('click', showChatHistory);
+hamburgerBtn.addEventListener('click', showChatHistory);
 
-// --- Select Chat from History ---
+// Delegation for history list
+historyList.addEventListener('click', (e) => {
+    const card = e.target.closest('.history-card');
+    if (card) {
+        const title = card.getAttribute('data-title');
+        hideChatHistory();
+        selectChat(title);
+    }
+});
+
+// ── Select Chat ──
 async function selectChat(title) {
-    // Visual reset while desktop switches conversation
-    chatContent.innerHTML = '<div class="loading-state"><div class="loading-spinner"></div><p>Switching Conversation...</p></div>';
-
+    chatContent.innerHTML = '<div class="loading-state"><div class="loading-spinner"></div><p>Switching conversation...</p></div>';
     try {
-        const res = await fetchWithAuth('/select-chat', {
+        const res  = await fetchWithAuth('/select-chat', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ title })
         });
         const data = await res.json();
-
         if (data.success) {
-            // Persistent polling to catch delayed desktop render/update
+            showToast('Switched conversation', 'success');
             let attempts = 0;
             const poll = setInterval(async () => {
                 await loadSnapshot();
-                attempts++;
-                if (attempts > 10) clearInterval(poll);
+                if (++attempts > 10) clearInterval(poll);
             }, 500);
         } else {
-            console.error('Failed to select chat:', data.error);
+            showToast('Could not switch — try again', 'error');
             setTimeout(loadSnapshot, 500);
         }
-    } catch (e) {
-        console.error('Select chat error:', e);
-        setTimeout(loadSnapshot, 500);
-    }
+    } catch(e) { setTimeout(loadSnapshot, 500); }
 }
 
-// --- Check Chat Status ---
+// ── Chat Status ──
 async function checkChatStatus() {
     try {
-        const res = await fetchWithAuth('/chat-status');
+        const res  = await fetchWithAuth('/chat-status');
         const data = await res.json();
-
-        chatIsOpen = data.hasChat || data.editorFound;
-
-        if (!chatIsOpen) {
+        const newStatus = data.hasChat || data.editorFound;
+        // Only show empty state if:
+        // 1. Server explicitly says no chat AND
+        // 2. We've never successfully shown content (first load)
+        if (!newStatus && !hasEverRenderedContent) {
+            chatIsOpen = false;
             showEmptyState();
+        } else if (newStatus) {
+            chatIsOpen = true;
         }
-    } catch (e) {
-        console.error('Chat status check failed:', e);
-    }
+        // If hasEverRenderedContent=true and newStatus=false, we stay showing last content
+    } catch(e) {}
 }
 
-// --- Empty State (No Chat Open) ---
+// ── Empty State ──
 function showEmptyState() {
     chatContent.innerHTML = `
         <div class="empty-state">
@@ -996,69 +854,46 @@ function showEmptyState() {
                 <line x1="9" y1="10" x2="15" y2="10"></line>
             </svg>
             <h2>No Chat Open</h2>
-            <p>Start a new conversation or select one from your history to begin chatting.</p>
-            <button class="empty-state-btn" id="newChatFromEmptyBtn">
-                Start New Conversation
-            </button>
-        </div>
-    `;
+            <p>Start a new conversation or pick one from your history.</p>
+            <button class="empty-state-btn" id="newChatFromEmptyBtn">Start New Conversation</button>
+        </div>`;
 }
+chatContent.addEventListener('click', (e) => {
+    if (e.target.closest('#newChatFromEmptyBtn')) startNewChat();
+});
 
-// --- Utility: Escape HTML ---
-function escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
-}
-
-// --- Settings Logic ---
-
-
+// ── Modals ──
 function openModal(title, options, onSelect) {
     modalTitle.textContent = title;
-    modalList.innerHTML = '';
+    modalList.innerHTML    = '';
     options.forEach(opt => {
         const div = document.createElement('div');
-        div.className = 'modal-option';
-        div.textContent = opt;
-        div.addEventListener('click', () => {
-            onSelect(opt);
-            closeModal();
-        });
+        div.className   = 'modal-option';
+        
+        const isObject = typeof opt === 'object';
+        const name = isObject ? opt.name : opt;
+        
+        div.innerHTML = isObject && opt.limit 
+            ? `<span>${name}</span> <span class="limit-badge">${opt.limit} tokens</span>` 
+            : `<span>${name}</span>`;
+            
+        div.addEventListener('click', () => { onSelect(name); closeModal(); });
         modalList.appendChild(div);
     });
     modalOverlay.classList.add('show');
 }
-
-function closeModal() {
-    modalOverlay.classList.remove('show');
-}
-
-modalOverlay.onclick = (e) => {
-    if (e.target === modalOverlay) closeModal();
-};
+function closeModal() { modalOverlay.classList.remove('show'); }
+modalOverlay.onclick = (e) => { if (e.target === modalOverlay) closeModal(); };
 
 modeBtn.addEventListener('click', () => {
     openModal('Select Mode', ['Fast', 'Planning'], async (mode) => {
         modeText.textContent = 'Setting...';
         try {
-            const res = await fetchWithAuth('/set-mode', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ mode })
-            });
+            const res  = await fetchWithAuth('/set-mode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode }) });
             const data = await res.json();
-            if (data.success) {
-                currentMode = mode;
-                modeText.textContent = mode;
-                modeBtn.classList.toggle('active', mode === 'Planning');
-            } else {
-                alert('Error: ' + (data.error || 'Unknown'));
-                modeText.textContent = currentMode;
-            }
-        } catch (e) {
-            modeText.textContent = currentMode;
-        }
+            if (data.success) { currentMode = mode; modeText.textContent = mode; modeBtn.classList.toggle('active', mode === 'Planning'); showToast(`Mode: ${mode}`, 'success'); }
+            else { modeText.textContent = currentMode; showToast('Failed to set mode', 'error'); }
+        } catch(e) { modeText.textContent = currentMode; }
     });
 });
 
@@ -1067,217 +902,330 @@ modelBtn.addEventListener('click', () => {
         const prev = modelText.textContent;
         modelText.textContent = 'Setting...';
         try {
-            const res = await fetchWithAuth('/set-model', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ model })
-            });
+            const res  = await fetchWithAuth('/set-model', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model }) });
             const data = await res.json();
-            if (data.success) {
-                modelText.textContent = model;
-            } else {
-                alert('Error: ' + (data.error || 'Unknown'));
-                modelText.textContent = prev;
-            }
-        } catch (e) {
-            modelText.textContent = prev;
-        }
+            if (data.success) { modelText.textContent = model; showToast(`Model: ${model.split(' ')[0]}`, 'success'); }
+            else { modelText.textContent = prev; showToast('Failed to set model', 'error'); }
+        } catch(e) { modelText.textContent = prev; }
     });
 });
 
-// --- Viewport / Keyboard Handling ---
-// This fixes the issue where the keyboard hides the input or layout breaks
-if (window.visualViewport) {
-    function handleResize() {
-        // Resize the body to match the visual viewport (screen minus keyboard)
-        document.body.style.height = window.visualViewport.height + 'px';
-
-        // Scroll to bottom if keyboard opened
-        if (document.activeElement === messageInput) {
-            setTimeout(scrollToBottom, 100);
-        }
-    }
-
-    window.visualViewport.addEventListener('resize', handleResize);
-    window.visualViewport.addEventListener('scroll', handleResize);
-    handleResize(); // Init
-} else {
-    // Fallback for older browsers without visualViewport support
-    window.addEventListener('resize', () => {
-        document.body.style.height = window.innerHeight + 'px';
-    });
-    document.body.style.height = window.innerHeight + 'px'; // Init
+// ── Right Panel Drawer (Artifacts / Code / Plans) ──
+function openPanel() {
+    panelOpen = true;
+    if (panelDrawer)  panelDrawer.classList.add('show');
+    if (panelOverlay) panelOverlay.classList.add('show');
+    startPanelPolling();
 }
 
-// --- Remote Click Logic (Thinking/Thought) ---
-chatContainer.addEventListener('click', async (e) => {
-    // Strategy: Check if the clicked element OR its parent contains "Thought" or "Thinking" text.
-    // This handles both opening (collapsed) and closing (expanded) states.
+function closePanel() {
+    panelOpen = false;
+    if (panelDrawer)  panelDrawer.classList.remove('show');
+    if (panelOverlay) panelOverlay.classList.remove('show');
+    stopPanelPolling();
+}
 
-    // 1. Find the nearest container that might be the "Thought" block
+if (panelHamburgerBtn) panelHamburgerBtn.addEventListener('click', () => panelOpen ? closePanel() : openPanel());
+if (closePanelDrawerBtn) closePanelDrawerBtn.addEventListener('click', closePanel);
+if (panelOverlay) panelOverlay.addEventListener('click', closePanel);
+
+async function switchPanelTab(tabName) {
+    try {
+        await fetchWithAuth('/remote-click', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                selector: 'button, [role="tab"]',
+                index: 0,
+                textContent: tabName
+            })
+        });
+        setTimeout(fetchPanelContent, 150);
+        setTimeout(fetchPanelContent, 600);
+    } catch(e) {}
+}
+
+async function fetchPanelContent() {
+    if (!panelOpen) return;
+    try {
+        const res  = await fetchWithAuth('/sidebar-content');
+        const data = await res.json();
+        if (!panelDrawerContent) return;
+        if (data.found && data.html) {
+            // 1. Inject high-fidelity CSS for code/diff highlighting
+            if (data.css) {
+                let styleTag = document.getElementById('desktop-aux-styles');
+                if (!styleTag) {
+                    styleTag = document.createElement('style');
+                    styleTag.id = 'desktop-aux-styles';
+                    document.head.appendChild(styleTag);
+                }
+                if (styleTag.textContent !== data.css) {
+                    styleTag.textContent = data.css;
+                }
+            }
+
+            // 2. Render dynamic tab headers to avoid overlaps and support all tabs
+            if (data.tabs && data.tabs.length > 0) {
+                const tabsContainer = document.getElementById('panelDrawerTabs');
+                if (tabsContainer) {
+                    const existingTabNames = Array.from(tabsContainer.querySelectorAll('.panel-tab')).map(t => t.textContent.trim());
+                    const newTabNames = data.tabs;
+                    const hasChanged = existingTabNames.length !== newTabNames.length || !existingTabNames.every((v, i) => v === newTabNames[i]);
+                    
+                    if (hasChanged) {
+                        tabsContainer.innerHTML = '';
+                        newTabNames.forEach(tabName => {
+                            const btn = document.createElement('button');
+                            btn.className = `panel-tab ${tabName === data.activeTab ? 'active' : ''}`;
+                            btn.textContent = tabName;
+                            btn.addEventListener('click', async () => {
+                                tabsContainer.querySelectorAll('.panel-tab').forEach(t => t.classList.remove('active'));
+                                btn.classList.add('active');
+                                await switchPanelTab(tabName);
+                            });
+                            tabsContainer.appendChild(btn);
+                        });
+                    } else {
+                        tabsContainer.querySelectorAll('.panel-tab').forEach(btn => {
+                            if (btn.textContent.trim() === data.activeTab) {
+                                btn.classList.add('active');
+                            } else {
+                                btn.classList.remove('active');
+                            }
+                        });
+                    }
+                }
+            }
+
+            const hash = data.html.substring(0, 100) + '_' + (data.activeTab || '');
+            if (hash === lastPanelHash) return;
+            lastPanelHash = hash;
+            panelDrawerContent.innerHTML = data.html;
+        } else {
+            if (!lastPanelHash) {
+                panelDrawerContent.innerHTML = `
+                    <div class="right-panel-empty">
+                        <svg viewBox="0 0 24 24" width="40" height="40" stroke="currentColor" stroke-width="1.2" fill="none" opacity="0.3">
+                            <rect x="3" y="3" width="18" height="18" rx="2"/>
+                            <line x1="9" y1="3" x2="9" y2="21"/>
+                            <path d="M13 8h4M13 12h4M13 16h4"/>
+                        </svg>
+                        <p>No artifact or code panel open on desktop.<br>Open one in Antigravity to see it here.</p>
+                    </div>`;
+            }
+        }
+    } catch(e) {}
+}
+
+function startPanelPolling() {
+    clearInterval(panelPollTimer);
+    fetchPanelContent();
+    panelPollTimer = setInterval(fetchPanelContent, 5000);
+}
+
+function stopPanelPolling() {
+    clearInterval(panelPollTimer);
+    panelPollTimer = null;
+}
+
+// ── File Attachment ──
+function renderAttachments() {
+    if (!attachedFiles) return;
+    attachedFiles.innerHTML = pendingAttachments.map((a, i) => `
+        <div class="attach-chip">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                ${a.type.startsWith('image/') ? '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>' : '<path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/>'}
+            </svg>
+            <span>${a.name}</span>
+            <button class="attach-chip-remove" data-idx="${i}" aria-label="Remove">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                    <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                </svg>
+            </button>
+        </div>
+    `).join('');
+    attachedFiles.querySelectorAll('.attach-chip-remove').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            const idx = parseInt(btn.getAttribute('data-idx'));
+            pendingAttachments.splice(idx, 1);
+            renderAttachments();
+        });
+    });
+}
+
+if (attachBtn && fileInput) {
+    attachBtn.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', () => {
+        Array.from(fileInput.files).forEach(file => {
+            if (pendingAttachments.length >= 5) { showToast('Max 5 files', 'error'); return; }
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+                pendingAttachments.push({ file, name: file.name, dataUrl: ev.target.result, type: file.type });
+                renderAttachments();
+            };
+            reader.readAsDataURL(file);
+        });
+        fileInput.value = '';
+    });
+}
+
+// Paste image support
+document.addEventListener('paste', (e) => {
+    if (document.activeElement !== messageInput) return;
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (const item of items) {
+        if (item.kind === 'file' && item.type.startsWith('image/')) {
+            e.preventDefault();
+            if (pendingAttachments.length >= 5) { showToast('Max 5 files', 'error'); return; }
+            const file = item.getAsFile();
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+                pendingAttachments.push({ file, name: 'pasted-image.png', dataUrl: ev.target.result, type: file.type });
+                renderAttachments();
+                showToast('Image pasted', 'success');
+            };
+            reader.readAsDataURL(file);
+        }
+    }
+});
+
+// Auto-detect right panel on startup — no-op now (drawer is always available)
+async function checkForRightPanel() {}
+
+// ── Remote Click (Thought blocks, Action buttons) ──
+chatContainer.addEventListener('click', async (e) => {
     const target = e.target.closest('div, span, p, summary, button, details');
     if (!target) return;
 
     const text = target.innerText || '';
-
-    // Check if this looks like a clickable UI toggle from Antigravity/Cascade
-    // Includes: Thought blocks, Worked status, Edited files status, and File lists
     const isUiToggle = /Thought|Thinking|Worked for|Edited|\d+\s+file/i.test(text) && text.length < 500;
 
     if (isUiToggle) {
-        // Visual feedback - briefly dim the clicked element
         target.style.opacity = '0.5';
         setTimeout(() => target.style.opacity = '1', 300);
-
-        // Extract just the first line for matching
         const firstLine = text.split('\n')[0].trim();
-
-        // Determine which occurrence of this text the user tapped
-        // This handles multiple Thought blocks with identical labels
         const allElements = chatContainer.querySelectorAll(target.tagName.toLowerCase());
         let tapIndex = 0;
         for (let i = 0; i < allElements.length; i++) {
             const el = allElements[i];
             const elText = el.innerText || '';
-            const elFirstLine = elText.split('\n')[0].trim();
-
-            // Only count if it looks like a UI toggle and matches the first line exactly
-            if (/Thought|Thinking|Worked for|Edited|\d+\s+file/i.test(elText) && elText.length < 500 && elFirstLine === firstLine) {
-                // If this is our target (or contains it), we've found the correct index
-                if (el === target || el.contains(target)) {
-                    break;
-                }
+            const elFirst = elText.split('\n')[0].trim();
+            if (/Thought|Thinking|Worked for|Edited|\d+\s+file/i.test(elText) && elText.length < 500 && elFirst === firstLine) {
+                if (el === target || el.contains(target)) break;
                 tapIndex++;
             }
         }
-
         try {
-            const response = await fetchWithAuth('/remote-click', {
+            await fetchWithAuth('/remote-click', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    selector: target.tagName.toLowerCase(),
-                    index: tapIndex,
-                    textContent: firstLine  // Use first line for more reliable matching
-                })
+                body: JSON.stringify({ selector: target.tagName.toLowerCase(), index: tapIndex, textContent: firstLine })
             });
-
-            // Reload snapshot multiple times to catch the UI change
-            // Desktop animation takes time, so we poll a few times
-            setTimeout(loadSnapshot, 400);   // Quick check
-            setTimeout(loadSnapshot, 800);   // After animation starts
-            setTimeout(loadSnapshot, 1500);  // After animation completes
-        } catch (e) {
-            console.error('Remote click failed:', e);
-        }
+            setTimeout(loadSnapshot, 400);
+            setTimeout(loadSnapshot, 800);
+            setTimeout(loadSnapshot, 1500);
+        } catch(e) {}
         return;
     }
 
-    // --- Command Action Buttons (Run, Reject, Allow, Deny, etc.) ---
+    // Action buttons
     const btn = e.target.closest('button, [role="button"]');
     if (btn) {
         const btnText = (btn.innerText || '').trim();
-
-        // Match various action keywords
         const actionKeywords = [
             'Allow this conversation', 'Always allow', 'Allow once',
-            'Review changes', 'Review',
-            'Confirm', 'Accept', 'Reject', 'Discard',
-            'Allow', 'Deny', 'Apply', 'Save', 'Run',
-            'Yes', 'No'
+            'Review changes', 'Review', 'Confirm', 'Accept', 'Reject', 'Discard',
+            'Allow', 'Deny', 'Apply', 'Save', 'Run', 'Yes', 'No', 'Proceed'
         ];
-
-        const btnTextLower = btnText.toLowerCase();
-        const matchedKeyword = actionKeywords.find(kw =>
-            btnTextLower.includes(kw.toLowerCase())
-        );
-        if (matchedKeyword) {
+        const matchedKw = actionKeywords.find(kw => btnText.toLowerCase().includes(kw.toLowerCase()));
+        if (matchedKw) {
             btn.style.opacity = '0.5';
             setTimeout(() => btn.style.opacity = '1', 300);
-
-            // Determine which occurrence of this button text the user tapped
-            const allButtons = Array.from(chatContainer.querySelectorAll('button, [role="button"]'));
-
-            // Filter to only those that match our specific keyword
-            const matchingButtons = allButtons.filter(b =>
-                (b.innerText || '').toLowerCase().includes(matchedKeyword.toLowerCase())
-            );
-            const btnIndex = matchingButtons.indexOf(btn);
-
+            const allBtns = Array.from(chatContainer.querySelectorAll('button, [role="button"]'));
+            const matching = allBtns.filter(b => (b.innerText || '').toLowerCase().includes(matchedKw.toLowerCase()));
+            const idx = matching.indexOf(btn);
             try {
                 await fetchWithAuth('/remote-click', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        selector: btn.tagName.toLowerCase() === 'button' ? 'button' : '[role="button"]',
-                        index: btnIndex >= 0 ? btnIndex : 0,
-                        textContent: matchedKeyword
-                    })
+                    body: JSON.stringify({ selector: btn.tagName.toLowerCase() === 'button' ? 'button' : '[role="button"]', index: idx >= 0 ? idx : 0, textContent: matchedKw })
                 });
-
-                // Rapidly poll for updates as actions usually trigger DOM changes
+                
+                // Auto-open right panel if action is related to artifacts / review
+                if (['review', 'plan', 'review changes'].some(k => matchedKw.toLowerCase().includes(k))) {
+                    setTimeout(openPanel, 600);
+                }
+                
                 setTimeout(loadSnapshot, 400);
                 setTimeout(loadSnapshot, 1000);
                 setTimeout(loadSnapshot, 2500);
-            } catch (err) {
-                console.error('Remote button click failed:', err);
+            } catch(e) {}
+        }
+    }
+});
+
+// ── Support Modal ──
+if (supportBtn) supportBtn.addEventListener('click', () => supportOverlay?.classList.add('show'));
+if (closeSupportBtn) closeSupportBtn.addEventListener('click', () => supportOverlay?.classList.remove('show'));
+if (supportOverlay) supportOverlay.addEventListener('click', (e) => { if (e.target === supportOverlay) supportOverlay.classList.remove('show'); });
+
+// ── SSL Listeners ──
+if (enableHttpsBtn) enableHttpsBtn.addEventListener('click', enableHttps);
+if (dismissSslBtn)  dismissSslBtn.addEventListener('click', dismissSslBanner);
+
+// ── Modal Listeners ──
+if (closeModalBtn)    closeModalBtn.addEventListener('click', closeModal);
+if (closeSidebarBtn)  closeSidebarBtn.addEventListener('click', hideChatHistory);
+if (sidebarOverlay)   sidebarOverlay.addEventListener('click', hideChatHistory);
+
+// ── Auto-open panel if sidebar content available ──
+setTimeout(async () => {
+    try {
+        const res  = await fetchWithAuth('/sidebar-content');
+        const data = await res.json();
+        if (data.found) {
+            if (panelHamburgerBtn) {
+                // Highlight the button to indicate content is available
+                panelHamburgerBtn.style.color = '#a5b4fc';
             }
         }
+    } catch(e) {}
+}, 3000);
+
+// ── Keyboard / Viewport ──
+if (window.visualViewport) {
+    function handleResize() {
+        document.body.style.height = window.visualViewport.height + 'px';
+        if (document.activeElement === messageInput) setTimeout(scrollToBottom, 100);
     }
-});
-
-// --- Initial Event Listeners (Refactored from inline) ---
-if (enableHttpsBtn) enableHttpsBtn.addEventListener('click', enableHttps);
-if (dismissSslBtn) dismissSslBtn.addEventListener('click', dismissSslBanner);
-if (closeModalBtn) closeModalBtn.addEventListener('click', closeModal);
-if (backHistoryBtn) backHistoryBtn.addEventListener('click', hideChatHistory);
-
-quickActionChips.forEach(chip => {
-    chip.addEventListener('click', () => {
-        const actionText = chip.getAttribute('data-action') || chip.innerText.trim();
-        // Handle specific cases if needed, otherwise just pass the text
-        if (actionText.includes('Explain')) {
-            quickAction('Explain this code in detailed and elaborate manner.');
-        } else if (actionText.includes('Fix')) {
-            quickAction('Please fix the bugs in this code...');
-        } else if (actionText.includes('Create')) {
-            quickAction('Please create or update documentation for this code.');
-        } else {
-            quickAction(actionText);
-        }
-    });
-});
-
-// Delegation for dynamic history items
-if (historyList) {
-    historyList.addEventListener('click', (e) => {
-        const newBtn = e.target.closest('.history-new-btn');
-        const card = e.target.closest('.history-card');
-        
-        if (newBtn) {
-            hideChatHistory();
-            startNewChat();
-        } else if (card) {
-            const title = card.getAttribute('data-title');
-            hideChatHistory();
-            selectChat(title);
-        }
-    });
+    window.visualViewport.addEventListener('resize', handleResize);
+    window.visualViewport.addEventListener('scroll', handleResize);
+    handleResize();
+} else {
+    window.addEventListener('resize', () => { document.body.style.height = window.innerHeight + 'px'; });
+    document.body.style.height = window.innerHeight + 'px';
 }
 
-// Delegation for empty state
-chatContent.addEventListener('click', (e) => {
-    if (e.target.closest('#newChatFromEmptyBtn')) {
-        startNewChat();
-    }
-});
-
-// --- Init ---
+// ── Init ──
 connectWebSocket();
-// Sync state initially and every 5 seconds to keep phone in sync with desktop changes
+// Run initial status/state checks, then set slower intervals to prevent ngrok rate limits
 fetchAppState();
-setInterval(fetchAppState, 5000);
-
-// Check chat status initially and periodically
 checkChatStatus();
-setInterval(checkChatStatus, 10000); // Check every 10 seconds
+setInterval(fetchAppState, 30000); // 30s instead of 5s
+setInterval(checkChatStatus, 60000); // 60s instead of 30s
+
+// Check for right panel availability on load
+setTimeout(checkForRightPanel, 3000);
+
+// ── Unregister Service Worker (disabled to avoid caching issues during active development/edits)
+if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.getRegistrations().then((registrations) => {
+        for (let registration of registrations) {
+            registration.unregister();
+        }
+    }).catch(err => {
+        console.error('Failed to unregister ServiceWorker: ', err);
+    });
+}

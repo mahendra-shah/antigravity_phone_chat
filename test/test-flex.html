@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body, html { height: 100%; margin: 0; display: flex; flex-direction: column; }
+        .chat-container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow-y: auto;
+            overflow-x: hidden;
+            position: relative;
+        }
+        .chat-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+        }
+        .chat-content > * {
+            display: flex;
+            flex-direction: column;
+            flex: 1;
+        }
+    </style>
+</head>
+<body>
+    <div class="chat-container">
+        <div class="chat-content">
+            <style></style>
+            <div class="flex-1 flex min-h-0 relative" style="background: red;">
+                <div style="background: blue; flex-grow: 1;">Hello</div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

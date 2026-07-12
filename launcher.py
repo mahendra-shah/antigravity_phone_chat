@@ -202,7 +202,7 @@ def main():
                     pinggy_token = os.environ.get('PINGGY_TOKEN')  # Optional: for persistent subdomain
                     pinggy_tunnel = pinggy.start_tunnel(
                         forwardto=f"localhost:{port}",
-                        token=pinggy_token if pinggy_token else None,
+                        token=pinggy_token if pinggy_token else "",
                         localservertls=(protocol == "https")
                     )
                     # Prefer HTTPS URL from the returned list
