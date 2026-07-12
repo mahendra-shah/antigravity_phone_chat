@@ -64,11 +64,14 @@ let chatIsOpen          = true;
 let panelOpen           = false;
 let panelPollTimer      = null;
 let lastPanelHash       = '';
+let lastPanelHtml       = '';
+let lastActiveTab       = '';
 let pendingAttachments  = []; // {file, name, dataUrl, type}
 let hasEverRenderedContent = false; // Guard: never blank if content was once shown
 let lastGoodHTML        = ''; // Guard: keep last good HTML
 let consecutiveFailures = 0; // Track failures before showing empty state
 const USER_SCROLL_LOCK_DURATION = 3000;
+let isUpdatingDOM = false;
 
 // ── Toast Helper ──
 let toastTimer = null;
@@ -135,8 +138,9 @@ const MODELS = [
 let lastScrollTop = 0;
 let isFetchingOlder = false;
 chatContainer.addEventListener('scroll', async () => {
-    // If scrolled near the top and we're scrolling up
-    if (chatContainer.scrollTop < 100 && chatContainer.scrollTop < lastScrollTop && !isFetchingOlder) {
+    if (isUpdatingDOM) return;
+    const isScrollingUp = chatContainer.scrollTop < lastScrollTop || chatContainer.scrollTop <= 5;
+    if (chatContainer.scrollTop < 100 && isScrollingUp && !isFetchingOlder) {
         isFetchingOlder = true;
         try {
             await fetchWithAuth('/remote-scroll', {
@@ -435,9 +439,18 @@ async function loadSnapshot() {
         // Only update DOM if content actually changed (prevents flicker/refresh artifacts)
         if (chatContent.dataset.lastHTML === cleanHtml) {
             // Content unchanged – just maintain scroll
-            if (isNearBottom) scrollToBottom();
+            if (isNearBottom) scrollToBottom('auto');
             return;
         }
+        
+        isUpdatingDOM = true;
+        
+        // Prevent layout height collapse during DOM updates to stop browser scroll-to-top jumps
+        const currentHeight = chatContent.offsetHeight;
+        if (currentHeight > 0) {
+            chatContent.style.minHeight = currentHeight + 'px';
+        }
+
         chatContent.dataset.lastHTML = cleanHtml;
         chatContent.innerHTML = cleanHtml;
         hasEverRenderedContent = true;
@@ -447,8 +460,10 @@ async function loadSnapshot() {
         addMobileCopyButtons();
 
         // Scroll restoration
-        if (isNearBottom) {
-            scrollToBottom();
+        const isDesktopNearBottom = data.scrollInfo ? (data.scrollInfo.scrollHeight - data.scrollInfo.scrollTop - data.scrollInfo.clientHeight < 120) : false;
+
+        if (isNearBottom || isDesktopNearBottom) {
+            scrollToBottom('auto');
         } else if (isFetchingOlder) {
             const newScrollHeight = chatContainer.scrollHeight;
             if (newScrollHeight > scrollHeight) {
@@ -459,6 +474,12 @@ async function loadSnapshot() {
             // Restore scroll position immediately to prevent layout height collapse from forcing scrollTop to 0
             chatContainer.scrollTop = scrollPos;
         }
+        
+        // Let layout settle, then clear height lock and release the scroll updates lock
+        setTimeout(() => {
+            chatContent.style.minHeight = '';
+            isUpdatingDOM = false;
+        }, 150);
 
     } catch (err) {
         consecutiveFailures++;
@@ -526,8 +547,8 @@ async function copyToClipboard(text) {
     return false;
 }
 
-function scrollToBottom() {
-    chatContainer.scrollTo({ top: chatContainer.scrollHeight, behavior: 'smooth' });
+function scrollToBottom(behavior = 'auto') {
+    chatContainer.scrollTo({ top: chatContainer.scrollHeight, behavior });
 }
 
 async function sendMessage() {
@@ -618,6 +639,39 @@ messageInput.addEventListener('input', function() {
     this.style.height = Math.min(this.scrollHeight, 150) + 'px';
 });
 
+// Keyboard and viewport stabilization for mobile layout
+const resetViewport = () => {
+    window.scrollTo(0, 0);
+    document.body.scrollTop = 0;
+};
+
+messageInput.addEventListener('focus', () => {
+    setTimeout(() => {
+        resetViewport();
+        scrollToBottom('auto');
+    }, 150);
+});
+
+messageInput.addEventListener('blur', () => {
+    setTimeout(resetViewport, 150);
+});
+
+if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', () => {
+        resetViewport();
+        if (document.activeElement === messageInput) {
+            setTimeout(() => {
+                scrollToBottom('auto');
+            }, 100);
+        }
+    });
+    window.visualViewport.addEventListener('scroll', () => {
+        if (window.visualViewport.offsetTop > 0) {
+            resetViewport();
+        }
+    });
+}
+
 // ── Refresh ──
 refreshBtn.addEventListener('click', () => { loadSnapshot(); fetchAppState(); });
 
@@ -650,6 +704,7 @@ async function syncScrollToDesktop() {
 }
 
 chatContainer.addEventListener('scroll', () => {
+    if (isUpdatingDOM) return;
     if (isFetchingOlder) return;
     userIsScrolling = true;
     userScrollLockUntil = Date.now() + USER_SCROLL_LOCK_DURATION;
@@ -937,7 +992,8 @@ async function switchPanelTab(tabName) {
             body: JSON.stringify({
                 selector: 'button, [role="tab"]',
                 index: 0,
-                textContent: tabName
+                textContent: tabName,
+                parentSelector: '[aria-label="Auxiliary Pane"], aside'
             })
         });
         setTimeout(fetchPanelContent, 150);
@@ -998,22 +1054,22 @@ async function fetchPanelContent() {
                 }
             }
 
-            const hash = data.html.substring(0, 100) + '_' + (data.activeTab || '');
-            if (hash === lastPanelHash) return;
-            lastPanelHash = hash;
+            if (data.html === lastPanelHtml && data.activeTab === lastActiveTab) return;
+            lastPanelHtml = data.html;
+            lastActiveTab = data.activeTab;
             panelDrawerContent.innerHTML = data.html;
         } else {
-            if (!lastPanelHash) {
-                panelDrawerContent.innerHTML = `
-                    <div class="right-panel-empty">
-                        <svg viewBox="0 0 24 24" width="40" height="40" stroke="currentColor" stroke-width="1.2" fill="none" opacity="0.3">
-                            <rect x="3" y="3" width="18" height="18" rx="2"/>
-                            <line x1="9" y1="3" x2="9" y2="21"/>
-                            <path d="M13 8h4M13 12h4M13 16h4"/>
-                        </svg>
-                        <p>No artifact or code panel open on desktop.<br>Open one in Antigravity to see it here.</p>
-                    </div>`;
-            }
+            lastPanelHtml = '';
+            lastActiveTab = '';
+            panelDrawerContent.innerHTML = `
+                <div class="right-panel-empty">
+                    <svg viewBox="0 0 24 24" width="40" height="40" stroke="currentColor" stroke-width="1.2" fill="none" opacity="0.3">
+                        <rect x="3" y="3" width="18" height="18" rx="2"/>
+                        <line x1="9" y1="3" x2="9" y2="21"/>
+                        <path d="M13 8h4M13 12h4M13 16h4"/>
+                    </svg>
+                    <p>No artifact or code panel open on desktop.<br>Open one in Antigravity to see it here.</p>
+                </div>`;
         }
     } catch(e) {}
 }
@@ -1137,7 +1193,8 @@ chatContainer.addEventListener('click', async (e) => {
         const actionKeywords = [
             'Allow this conversation', 'Always allow', 'Allow once',
             'Review changes', 'Review', 'Confirm', 'Accept', 'Reject', 'Discard',
-            'Allow', 'Deny', 'Apply', 'Save', 'Run', 'Yes', 'No', 'Proceed'
+            'Allow', 'Deny', 'Apply', 'Save', 'Run', 'Yes', 'No', 'Proceed',
+            'Implementation Plan', 'Plan', 'Show plan', 'View plan'
         ];
         const matchedKw = actionKeywords.find(kw => btnText.toLowerCase().includes(kw.toLowerCase()));
         if (matchedKw) {

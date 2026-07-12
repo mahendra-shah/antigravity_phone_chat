@@ -504,7 +504,50 @@ async function captureSnapshot(cdp) {
 }
 
 // Inject message into Antigravity
-async function injectMessage(cdp, text) {
+async function injectMessage(cdp, text, attachments = []) {
+    // 1. If we have attachments, write them to disk and inject them via CDP setFileInputFiles
+    if (attachments && attachments.length > 0) {
+        const filePaths = [];
+        for (const att of attachments) {
+            try {
+                if (att.dataUrl && att.name) {
+                    const base64Data = att.dataUrl.split(';base64,').pop();
+                    const tempPath = join(os.tmpdir(), `agphone_upload_${Date.now()}_${att.name}`);
+                    fs.writeFileSync(tempPath, base64Data, { encoding: 'base64' });
+                    filePaths.push(tempPath);
+                }
+            } catch (e) {
+                console.error("Failed to write temp attachment file:", e);
+            }
+        }
+
+        if (filePaths.length > 0) {
+            // Find file input element in active contexts
+            for (const ctx of cdp.contexts) {
+                try {
+                    const findRes = await cdp.call("Runtime.evaluate", {
+                        expression: `document.querySelector('input[type="file"]')`,
+                        contextId: ctx.id
+                    });
+                    
+                    const objectId = findRes.result?.objectId;
+                    if (objectId) {
+                        await cdp.call("DOM.setFileInputFiles", {
+                            files: filePaths,
+                            objectId: objectId
+                        });
+                        console.log("Attached files via CDP:", filePaths);
+                        // Wait a bit for the desktop app to process files
+                        await new Promise(r => setTimeout(r, 600));
+                        break; // Success
+                    }
+                } catch (e) {
+                    console.error("Failed to attach files in context " + ctx.id + ":", e.message);
+                }
+            }
+        }
+    }
+
     const FOCUS_EXPRESSION = `(() => {
         try {
             const cancel = document.querySelector('[data-tooltip-id="input-send-button-cancel-tooltip"]');
@@ -558,27 +601,29 @@ async function injectMessage(cdp, text) {
 
     for (const ctx of cdp.contexts) {
         try {
-            // Step 1: Focus and Clear
-            const focusRes = await cdp.call("Runtime.evaluate", {
-                expression: FOCUS_EXPRESSION,
-                returnByValue: true,
-                awaitPromise: true,
-                contextId: ctx.id
-            });
+            // Step 1: Focus and Clear (if text was provided)
+            if (text) {
+                const focusRes = await cdp.call("Runtime.evaluate", {
+                    expression: FOCUS_EXPRESSION,
+                    returnByValue: true,
+                    awaitPromise: true,
+                    contextId: ctx.id
+                });
 
-            if (focusRes.result?.value?.error) {
-                continue; // Try next context
+                if (focusRes.result?.value?.error) {
+                    continue; // Try next context
+                }
+
+                if (focusRes.result?.value?.reason === "busy") {
+                    return { ok: false, reason: "busy" };
+                }
+
+                // Step 2: Native CDP Text Injection
+                await cdp.call("Input.insertText", { text: text });
+
+                // Wait a brief tick for UI to process text insertion
+                await new Promise(r => setTimeout(r, 100));
             }
-
-            if (focusRes.result?.value?.reason === "busy") {
-                return { ok: false, reason: "busy" };
-            }
-
-            // Step 2: Native CDP Text Injection
-            await cdp.call("Input.insertText", { text: text });
-
-            // Wait a brief tick for UI to process text insertion
-            await new Promise(r => setTimeout(r, 100));
 
             // Step 3: Click Submit / Press Enter
             const submitRes = await cdp.call("Runtime.evaluate", {
@@ -733,13 +778,17 @@ async function stopGeneration(cdp) {
 }
 
 // Click Element (Remote)
-async function clickElement(cdp, { selector, index, textContent }) {
+async function clickElement(cdp, { selector, index, textContent, parentSelector }) {
     const safeText = JSON.stringify(textContent || '');
+    const safeParent = parentSelector ? JSON.stringify(parentSelector) : 'null';
 
     const EXP = `(async () => {
         try {
-            // Priority: Search inside the chat container first for better accuracy
-            const root = document.getElementById('conversation') || document.getElementById('chat') || document.getElementById('cascade') || document;
+            // Find root using parentSelector if provided, otherwise default chat container
+            let root = ${safeParent} ? document.querySelector(${safeParent}) : null;
+            if (!root) {
+                root = document.getElementById('conversation') || document.getElementById('chat') || document.getElementById('cascade') || document;
+            }
             
             // Strategy: Find all elements matching the selector
             let elements = Array.from(root.querySelectorAll('${selector}'));
@@ -1338,8 +1387,15 @@ async function selectChat(cdp, chatTitle) {
                     if (scrollContainer) {
                         for (let j = 0; j < 8; j++) {
                             const lastHeight = scrollContainer.scrollHeight;
+                            
+                            // Shake scroll to force the virtualized infinite scroller to fetch history
+                            scrollContainer.scrollTop = 20;
+                            scrollContainer.dispatchEvent(new Event('scroll', { bubbles: true }));
+                            await new Promise(r => setTimeout(r, 50));
                             scrollContainer.scrollTop = 0;
-                            await new Promise(r => setTimeout(r, 300));
+                            scrollContainer.dispatchEvent(new Event('scroll', { bubbles: true }));
+                            
+                            await new Promise(r => setTimeout(r, 350));
                             if (scrollContainer.scrollHeight === lastHeight) {
                                 break;
                             }
@@ -1666,7 +1722,8 @@ async function createServer() {
     AUTH_TOKEN = hashString(APP_PASSWORD + authSalt);
 
     app.use(compression());
-    app.use(express.json());
+    app.use(express.json({ limit: '50mb' }));
+    app.use(express.urlencoded({ limit: '50mb', extended: true }));
     app.use((req, res, next) => {
         console.log(`[REQUEST] ${req.method} ${req.url}`);
         next();
@@ -1833,17 +1890,17 @@ async function createServer() {
 
     // Send message
     app.post('/send', async (req, res) => {
-        const { message } = req.body;
+        const { message, attachments } = req.body;
 
-        if (!message) {
-            return res.status(400).json({ error: 'Message required' });
+        if (!message && (!attachments || attachments.length === 0)) {
+            return res.status(400).json({ error: 'Message or attachments required' });
         }
 
         if (!cdpConnection) {
             return res.status(503).json({ error: 'CDP not connected' });
         }
 
-        const result = await injectMessage(cdpConnection, message);
+        const result = await injectMessage(cdpConnection, message, attachments);
 
         // Always return 200 - the message usually goes through even if CDP reports issues
         // The client will refresh and see if the message appeared
@@ -2130,9 +2187,9 @@ async function main() {
 
         // Remote Click
         app.post('/remote-click', async (req, res) => {
-            const { selector, index, textContent } = req.body;
+            const { selector, index, textContent, parentSelector } = req.body;
             if (!cdpConnection) return res.status(503).json({ error: 'CDP disconnected' });
-            const result = await clickElement(cdpConnection, { selector, index, textContent });
+            const result = await clickElement(cdpConnection, { selector, index, textContent, parentSelector });
             res.json(result);
         });
 
@@ -2164,13 +2221,16 @@ async function main() {
             let lastError = null;
             const EXP = `(async () => {
                 try {
-                    // Find the right-side panel by layout (Artifacts pane)
+                    // Find the right-side panel (Auxiliary Pane / Artifacts)
                     const allDivs = Array.from(document.querySelectorAll('div'));
-                    const auxPane = allDivs.find(el => {
-                        if (el.id === 'root') return false;
-                        const r = el.getBoundingClientRect();
-                        return r.width > 200 && r.width < 800 && r.right > window.innerWidth - 100 && r.top < 100 && el.parentElement && el.parentElement.id !== 'root';
-                    });
+                    const auxPane = document.querySelector('[aria-label="Auxiliary Pane"]') ||
+                                    document.querySelector('aside') ||
+                                    allDivs.find(el => {
+                                        if (el.id === 'root') return false;
+                                        const r = el.getBoundingClientRect();
+                                        // Relaxed layout search: must be on the right side of the screen
+                                        return r.width > 150 && r.right > window.innerWidth - 250 && r.top < 120 && el.parentElement && el.parentElement.id !== 'root';
+                                    });
                     
                     if (auxPane && auxPane.offsetWidth > 50 && auxPane.offsetHeight > 50) {
                         // 1. Dynamic Tabs Extraction
@@ -2189,13 +2249,39 @@ async function main() {
                         });
                         const activeTab = activeTabEl ? activeTabEl.innerText.trim() : (tabs[0] || '');
 
-                        // Hide the desktop tab bar container in the clone
-                        if (tabElements.length > 0) {
-                            const tabParent = tabElements[0].parentElement;
-                            if (tabParent && tabParent !== auxPane) {
-                                tabParent.setAttribute('data-ag-desktop-tabs', 'true');
+                        // Tag original elements with custom attribute before cloning (since innerText fails on disconnected nodes)
+                        tabElements.forEach(el => el.setAttribute('data-desktop-tab-btn', 'true'));
+                        
+                        const closeBtns = Array.from(auxPane.querySelectorAll('button[aria-label*="Close"], svg.lucide-x'));
+                        const closeContainers = closeBtns.map(btn => btn.closest('button') || btn);
+                        closeContainers.forEach(el => el.setAttribute('data-desktop-close-btn', 'true'));
+
+                        // Clone the auxPane to avoid modifying the desktop DOM!
+                        const clone = auxPane.cloneNode(true);
+                        
+                        // Clean up attributes from the original desktop DOM
+                        tabElements.forEach(el => el.removeAttribute('data-desktop-tab-btn'));
+                        closeContainers.forEach(el => el.removeAttribute('data-desktop-close-btn'));
+                        
+                        // Programmatically find and remove the desktop tab buttons in the clone
+                        const clonedTabs = Array.from(clone.querySelectorAll('[data-desktop-tab-btn="true"]'));
+                        clonedTabs.forEach(el => {
+                            const parent = el.parentElement;
+                            if (parent && parent !== clone) {
+                                const siblings = Array.from(parent.children);
+                                const allAreTabs = siblings.every(sib => sib.getAttribute('data-desktop-tab-btn') === 'true');
+                                if (allAreTabs) {
+                                    parent.remove();
+                                } else {
+                                    el.remove();
+                                }
+                            } else {
+                                el.remove();
                             }
-                        }
+                        });
+
+                        // Remove close buttons from the clone
+                        clone.querySelectorAll('[data-desktop-close-btn="true"]').forEach(el => el.remove());
 
                         // 2. CSS Stylesheets Extraction (Syntax highlighting)
                         const cssRules = [];
@@ -2213,7 +2299,7 @@ async function main() {
                         } catch(e) {}
                         const css = cssRules.join('\\n');
 
-                        return { found: true, html: auxPane.innerHTML, css, tabs, activeTab };
+                        return { found: true, html: clone.outerHTML, css, tabs, activeTab };
                     }
                     // Nothing open
                     return { found: false, html: '' };

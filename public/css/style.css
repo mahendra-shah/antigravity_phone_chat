@@ -871,15 +871,23 @@ body {
 }
 
 /* Hide duplicate desktop headers/toolbars/tabs inside the injected snapshot */
-.panel-drawer-content [class*="header"],
-.panel-drawer-content [class*="titlebar"],
-.panel-drawer-content [class*="tab-bar"],
-.panel-drawer-content [class*="tabs"],
-.panel-drawer-content button[aria-label*="Close"],
-.panel-drawer-content svg[class*="lucide-x"],
 [data-ag-desktop-tabs="true"],
 .panel-drawer-content [data-ag-desktop-tabs="true"] {
     display: none !important;
+}
+
+/* Normalize cloned desktop auxPane outer container on mobile */
+.panel-drawer-content > * {
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+    flex: 1 !important;
+    height: 100% !important;
+    position: static !important;
+    border: none !important;
+    box-shadow: none !important;
+    display: flex !important;
+    flex-direction: column !important;
 }
 
 /* Context Limit UI */
